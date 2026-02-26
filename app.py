@@ -104,9 +104,8 @@ app = gr.Interface(
     fn=vid_inf,
     inputs=[input_video],
     outputs=[output_frames, output_video_file],
-    title=f"MotionScope",
-    description=f'A gradio app for dynamic video analysis tool that leverages advanced background subtraction and contour detection techniques to identify and track moving objects in real-time.',
-    allow_flagging="never",
+    flagging_mode="never",
     examples=[["sample/car.mp4"]],
 )
+
 app.queue().launch()
