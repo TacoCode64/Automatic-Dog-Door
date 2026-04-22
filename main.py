@@ -148,7 +148,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("/home/pi/petdoor.log"),
+        logging.FileHandler("/home/vickypi/petdoor.log"),
     ],
 )
 log = logging.getLogger("petdoor")
