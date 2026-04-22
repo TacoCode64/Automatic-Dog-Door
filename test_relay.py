@@ -13,8 +13,8 @@ Run this before main.py to confirm polarity-swap wiring is correct.
 The actuator should extend fully, pause, then retract fully.
 
 GPIO pins must match main.py:
-  RELAY_EXTEND_PIN  = 14   (GPIO 14, physical Pin 8)
-  RELAY_RETRACT_PIN = 15   (GPIO 15, physical Pin 22)
+  RELAY_EXTEND_PIN  = 8   (GPIO 14, physical Pin 8)
+  RELAY_RETRACT_PIN = 22 (GPIO 15, physical Pin 22)
 
 Usage:
     sudo python3 test_relay.py
