@@ -23,13 +23,13 @@ Usage:
 import RPi.GPIO as GPIO
 import time
 
-RELAY_EXTEND_PIN  = 14
-RELAY_RETRACT_PIN = 15
+RELAY_EXTEND_PIN  = 8
+RELAY_RETRACT_PIN = 22
 RELAY_DEAD_TIME_S = 0.1   # safety gap between switching relays
 
 # Travel time in seconds — adjust to match your actuator's stroke speed.
 # The 12" 12V actuator in the BOM typically takes 4-5 s for a full stroke.
-TRAVEL_S = 5.0
+TRAVEL_S = 6.0
 
 # ---------------------------------------------------------------------------
 GPIO.setmode(GPIO.BCM)
