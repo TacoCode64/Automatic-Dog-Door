@@ -39,8 +39,8 @@
 // ---------------------------------------------------------------------------
 // Configuration  ← EDIT THESE
 // ---------------------------------------------------------------------------
-const char* WIFI_SSID     = "YourWiFiSSID";
-const char* WIFI_PASSWORD = "YourWiFiPassword";
+const char* WIFI_SSID     = "g3283789";
+const char* WIFI_PASSWORD = "866694295";
 
 // NTP time server for timestamping SD card files
 const char* NTP_SERVER    = "pool.ntp.org";
