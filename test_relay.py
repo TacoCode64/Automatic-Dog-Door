@@ -13,8 +13,8 @@ Run this before main.py to confirm polarity-swap wiring is correct.
 The actuator should extend fully, pause, then retract fully.
 
 GPIO pins must match main.py:
-  RELAY_EXTEND_PIN  = 8   (GPIO 14, physical Pin 8)
-  RELAY_RETRACT_PIN = 22 (GPIO 15, physical Pin 22)
+  RELAY_EXTEND_PIN  = 14  (GPIO 14, physical Pin 8)
+  RELAY_RETRACT_PIN = 15 (GPIO 15, physical Pin 22)
 
 Usage:
     sudo python3 test_relay.py
@@ -23,8 +23,8 @@ Usage:
 import RPi.GPIO as GPIO
 import time
 
-RELAY_EXTEND_PIN  = 8
-RELAY_RETRACT_PIN = 22
+RELAY_EXTEND_PIN  = 14
+RELAY_RETRACT_PIN = 15
 RELAY_DEAD_TIME_S = 0.1   # safety gap between switching relays
 
 # Travel time in seconds — adjust to match your actuator's stroke speed.
