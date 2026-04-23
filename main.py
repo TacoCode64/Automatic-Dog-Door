@@ -79,11 +79,11 @@ CONFIG = {
     # RSSI calibration (run calibrate_rssi.py first)
     # A  = RSSI at 1 meter (negative integer, e.g. -65)
     # N  = path-loss exponent (typically 2.0 indoors)
-    "RSSI_A": -65,
+    "RSSI_A": -56,
     "RSSI_N": 2.0,
 
     # Distance in meters that triggers the opening sequence
-    "TRIGGER_DISTANCE_M": 1.5,
+    "TRIGGER_DISTANCE_M": 2,
 
     # How long (seconds) to keep the door open before closing
     "DOOR_OPEN_HOLD_S": 5,
