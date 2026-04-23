@@ -98,30 +98,30 @@ def main():
  held = None
  
  try:
- while True:
- if key_available(fd):
- ch = read_char(fd)
+  while True:
+  if key_available(fd):
+   ch = read_char(fd)
  
  if ch == 'q':
- both_off()
- status("Quitting ...")
- break
+  both_off()
+  status("Quitting ...")
+  break
  
  if ch in ('e', 'r') and ch != held:
- held = ch
+  held = ch
  if ch == 'e':
- do_extend()
- status("EXTENDING — release key to stop")
+  do_extend()
+  status("EXTENDING — release key to stop")
  else:
- do_retract()
- status("RETRACTING — release key to stop")
+  do_retract()
+  status("RETRACTING — release key to stop")
  
  else:
  # No key waiting — if something was held, it has been released
- if held is not None:
- held = None
- both_off()
- status("STOPPED — waiting for input")
+  if held is not None:
+   held = None
+   both_off()
+   status("STOPPED — waiting for input")
  
  time.sleep(POLL_INTERVAL_S)
  
@@ -129,10 +129,10 @@ def main():
  pass
  
  finally:
- both_off()
- restore(fd, old)
- GPIO.cleanup()
- print("\r\n Both relays OFF. GPIO cleaned up. Goodbye.\r\n")
+  both_off()
+  restore(fd, old)
+  GPIO.cleanup()
+  print("\r\n Both relays OFF. GPIO cleaned up. Goodbye.\r\n")
  
  
 if __name__ == "__main__":
