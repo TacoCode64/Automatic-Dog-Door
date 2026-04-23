@@ -129,14 +129,10 @@ STEPPER_PINS = [17, 27, 22, 23]  # IN1, IN2, IN3, IN4 on ULN2003
 RELAY_DEAD_TIME_S = 0.1
 
 # 4-phase half-step sequence for 28BYJ-48 style stepper
-HALF_STEP_SEQ = [
-    [1, 0, 0, 0],
-    [1, 1, 0, 0],
-    [0, 1, 0, 0],
+FULL_STEP_SEQ = [
+    [1, 0, 1, 0],
     [0, 1, 1, 0],
-    [0, 0, 1, 0],
-    [0, 0, 1, 1],
-    [0, 0, 0, 1],
+    [0, 1, 0, 1],
     [1, 0, 0, 1],
 ]
 
