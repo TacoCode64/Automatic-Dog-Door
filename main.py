@@ -188,7 +188,7 @@ def gpio_cleanup():
 def _step(step_index: int):
     """Apply one half-step."""
     for i, pin in enumerate(STEPPER_PINS):
-        GPIO.output(pin, HALF_STEP_SEQ[step_index % 8][i])
+        GPIO.output(pin, FULL_STEP_SEQ[step_index % 4][i])
 
 
 def stepper_rotate(steps: int, delay_s: float = 0.002, reverse: bool = False):
