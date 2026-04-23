@@ -43,7 +43,7 @@ def _step(direction=1):
     global step_index
     step_index = (step_index + direction) % 4
     for i, p in enumerate(STEPPER_PINS):
-        GPIO.output(p, FULL_STEP_SEQ[step_index][i])
+        GPIO.output(p, FULL_STEP_SEQ[step_index % 4][i])
     time.sleep(0.002)
 
 def rotate(n, reverse=False):
