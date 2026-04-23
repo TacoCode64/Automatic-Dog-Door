@@ -24,9 +24,11 @@ import time
 
 STEPPER_PINS = [17, 27, 22, 23]
 
-HALF_STEP_SEQ = [
-    [1,0,0,0],[1,1,0,0],[0,1,0,0],[0,1,1,0],
-    [0,0,1,0],[0,0,1,1],[0,0,0,1],[1,0,0,1],
+FULL_STEP_SEQ = [
+    [1,0,1,0],
+    [0,1,1,0],
+    [0,1,0,1],
+    [1,0,0,1],
 ]
 
 GPIO.setmode(GPIO.BCM)
@@ -39,9 +41,9 @@ step_index  = 0
 
 def _step(direction=1):
     global step_index
-    step_index = (step_index + direction) % 8
+    step_index = (step_index + direction) % 4
     for i, p in enumerate(STEPPER_PINS):
-        GPIO.output(p, HALF_STEP_SEQ[step_index][i])
+        GPIO.output(p, FULL_STEP_SEQ[step_index][i])
     time.sleep(0.002)
 
 def rotate(n, reverse=False):
