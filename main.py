@@ -398,38 +398,45 @@ def ble_scan_loop():
     log.info(f"BLE scan loop started. Target MAC: {target_mac}")
 
     while True:
-        try:
-            devices = scanner.scan(1.0)  # scan for 1 second
-            beacon_found = False
-          
-            for dev in devices:
+for dev in devices:
+                if dev.addr.lower() == target_mac:
+                    beacon_found = True
+                    rssi_window.append(dev.rssi)
 
-  if dev.addr.lower() == target_mac:
-        beacon_found = True
-        rssi_window.append(dev.rssi)
+                    # Only compute distance once we have a full 3-second window
+                    if len(rssi_window) < 3:
+                        log.debug(f"Beacon RSSI={dev.rssi} dBm — building average ({len(rssi_window)}/3)")
+                        continue
 
-        # Only compute distance once we have a full 3-second window
-        if len(rssi_window) < 3:
-            log.debug(f"Beacon RSSI={dev.rssi} dBm — building average ({len(rssi_window)}/3)")
-            continue
+                    avg_rssi = sum(rssi_window) / len(rssi_window)
+                    dist = rssi_to_distance(avg_rssi)
 
-        avg_rssi = sum(rssi_window) / len(rssi_window)
-        dist = rssi_to_distance(avg_rssi)
+                    with state_lock:
+                        state["dog_detected"] = True
+                        state["dog_distance_m"] = round(dist, 2)
 
-        with state_lock:
-            state["dog_detected"] = True
-            state["dog_distance_m"] = round(dist, 2)
+                    log.debug(f"Beacon avg RSSI={avg_rssi:.1f} dBm  dist≈{dist:.2f}m")
 
-        log.debug(f"Beacon avg RSSI={avg_rssi:.1f} dBm  dist≈{dist:.2f}m")
+                    now = time.time()
+                    door_busy = door_thread and door_thread.is_alive()
+                    since_last = now - last_trigger_time
 
-        now = time.time()
-        door_busy = door_thread and door_thread.is_alive()
-        since_last = now - last_trigger_time
-
-        if dist <= trigger_dist and not door_busy and since_last >= cooldown:
+                    if dist <= trigger_dist and not door_busy and since_last >= cooldown:
                         log.info(f"Dog within {dist:.2f}m — triggering door.")
                         last_trigger_time = now
                         door_thread = threading.Thread(
+                            target=open_door_sequence, daemon=True
+                        )
+                        door_thread.start()
+
+            if not beacon_found:
+                with state_lock:
+                    state["dog_detected"] = False
+                    state["dog_distance_m"] = None
+
+        except Exception as e:
+            log.error(f"BLE scan error: {e}")
+            time.sleep(2)
                             target=open_door_sequence, daemon=True
                         )
                         door_thread.start()
