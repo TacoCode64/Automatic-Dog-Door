@@ -80,10 +80,10 @@ CONFIG = {
     # A  = RSSI at 1 meter (negative integer, e.g. -65)
     # N  = path-loss exponent (typically 2.0 indoors)
     "RSSI_A": -55,
-    "RSSI_N": 2.8,
+    "RSSI_N": 3.5,
 
     # Distance in meters that triggers the opening sequence
-    "TRIGGER_DISTANCE_M": 2,
+    "TRIGGER_DISTANCE_M": 1.5,
 
     # How long (seconds) to keep the door open before closing
     "DOOR_OPEN_HOLD_S": 5,
@@ -92,7 +92,7 @@ CONFIG = {
     # This should be slightly longer than the actuator's full-stroke travel
     # time so it reaches its end-stop. For the 12" 12V actuator in the BOM
     # (typically ~4-5 s full stroke) start with 5.0 and adjust as needed.
-    "ACTUATOR_TRAVEL_S": 5.0,
+    "ACTUATOR_TRAVEL_S": 7.0,
 
     # Stepper motor: how many steps to rotate the door handle
     # Run calibrate_stepper.py to find the right value for your handle
