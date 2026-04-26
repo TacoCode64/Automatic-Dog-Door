@@ -50,8 +50,8 @@ def main():
         sys.exit(1)
 
     mac      = sys.argv[1].strip().lower()
-    A        = float(sys.argv[2]) if len(sys.argv) > 2 else -60.0
-    N        = float(sys.argv[3]) if len(sys.argv) > 3 else 3.4
+    A        = float(sys.argv[2]) if len(sys.argv) > 2 else -55.0
+    N        = float(sys.argv[3]) if len(sys.argv) > 3 else 2.8
     actual_m = float(sys.argv[4]) if len(sys.argv) > 4 else 0.0
 
     scanner = Scanner().withDelegate(_D())
