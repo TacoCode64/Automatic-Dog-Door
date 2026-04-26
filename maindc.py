@@ -90,7 +90,7 @@ CONFIG = {
     "RSSI_N": 2.8,
 
     # Distance in meters that triggers the opening sequence
-    "TRIGGER_DISTANCE_M": 1.5,
+    "TRIGGER_DISTANCE_M": 2,
 
     # How long (seconds) to keep the door open before closing
     "DOOR_OPEN_HOLD_S": 5,
