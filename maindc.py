@@ -1,21 +1,21 @@
 """
 Pet Door Main Controller
-Raspberry Pi 4B
+Raspberry Pi 4B  —  lgpio edition (kernel 6.6+)
 
 System overview:
   - Scans for BLE beacon (dog tag) using bluepy
   - Calculates distance from RSSI
   - When dog is within threshold, activates opening sequence:
-      1. DC motor (L298N) rotates to turn door handle, tracked by rotary encoder
+      1. DC motor (L298N) runs forward for MOTOR_TURN_S seconds to depress handle
       2. RELAY_EXTEND energised  → +12 V to actuator pin A, GND to pin B
          (actuator extends / door opens)
-      3. 5-second hold timer
+      3. DOOR_OPEN_HOLD_S second hold timer
       4. RELAY_EXTEND de-energised (brief dead-time to avoid shoot-through)
       5. RELAY_RETRACT energised  → +12 V to actuator pin B, GND to pin A
          (polarity reversed / actuator retracts / door closes)
       6. RELAY_RETRACT de-energised
-      7. DC motor returns handle to neutral using encoder feedback
-  - Pi camera records video clips each opening event
+      7. DC motor runs backward for MOTOR_TURN_S seconds to return handle
+  - Pi camera records video clips on each opening event
   - Sends push notification via ntfy.sh (free, no account required)
   - Web dashboard served locally at http://<pi-ip>:5000
 
@@ -49,20 +49,12 @@ DC Motor (L298N) Wiring:
   Motor terminals → L298N OUT1 / OUT2
   L298N 12V → 12V supply, GND shared with Pi
 
-Rotary Encoder Wiring:
-  CLK (A) → ENCODER_CLK_PIN  (e.g. GPIO 5)
-  DT  (B) → ENCODER_DT_PIN   (e.g. GPIO 6)
-  GND     → Pi GND
-  VCC     → Pi 3.3V
-
 GPIO Pin Assignments (BCM numbering):
   GPIO 14  -> RELAY_EXTEND  IN  (active HIGH)
   GPIO 15  -> RELAY_RETRACT IN  (active HIGH)
   GPIO 12  -> L298N ENA     (PWM)
   GPIO 24  -> L298N IN1
   GPIO 25  -> L298N IN2
-  GPIO 5   -> Rotary encoder CLK (channel A)
-  GPIO 6   -> Rotary encoder DT  (channel B)
   Pin 2    -> 5V power (relay board VCC for both relays)
   Pin 6    -> Ground   (relay board GND for both relays)
   Pin 4    -> 5V power (UBEC output / L298N logic)
@@ -79,7 +71,7 @@ import subprocess
 from collections import deque
 from datetime import datetime
 
-import RPi.GPIO as GPIO
+import lgpio
 from bluepy.btle import Scanner, DefaultDelegate
 from flask import Flask, jsonify, send_from_directory
 import requests
@@ -104,23 +96,15 @@ CONFIG = {
     "DOOR_OPEN_HOLD_S": 5,
 
     # How long (seconds) to power the actuator in each direction.
-    # This should be slightly longer than the actuator's full-stroke travel
-    # time so it reaches its end-stop.
+    # Slightly longer than the actuator's full-stroke travel time.
     "ACTUATOR_TRAVEL_S": 7.0,
 
-    # DC motor: encoder ticks to fully depress the door handle.
-    # Run calibrate_dc_motor.py to find the correct value for your handle.
-    "MOTOR_TICKS": 200,
+    # How long (seconds) to run the DC motor to fully depress the door handle.
+    # Run calibrate_dc.py to find the correct value for your setup.
+    "MOTOR_TURN_S": 1.0,
 
     # DC motor PWM duty cycle (0–100). Increase if the motor stalls.
     "MOTOR_SPEED": 50,
-
-    # Encoder ticks-per-revolution (must match your encoder's spec).
-    # Common values: 20, 100, 360, 600
-    "ENCODER_TICKS_PER_REV": 20,
-
-    # Safety timeout (seconds) for the encoder-feedback reset move.
-    "MOTOR_RESET_TIMEOUT_S": 10.0,
 
     # Minimum seconds between opening events (prevents rapid re-triggers)
     "COOLDOWN_S": 15,
@@ -144,14 +128,9 @@ CONFIG = {
 RELAY_EXTEND_PIN  = 14   # HIGH → actuator extends  (door opens)
 RELAY_RETRACT_PIN = 15   # HIGH → actuator retracts (door closes)
 
-# L298N DC motor driver pins
-MOTOR_ENA_PIN   = 12   # PWM-capable pin (hardware PWM preferred)
-MOTOR_IN1_PIN   = 24
-MOTOR_IN2_PIN   = 25
-
-# Rotary encoder pins
-ENCODER_CLK_PIN = 5    # Channel A
-ENCODER_DT_PIN  = 6    # Channel B
+MOTOR_ENA_PIN = 12   # PWM-capable pin
+MOTOR_IN1_PIN = 24
+MOTOR_IN2_PIN = 25
 
 # Dead-time between relay switching to prevent simultaneous closure
 RELAY_DEAD_TIME_S = 0.1
@@ -180,82 +159,41 @@ state = {
     "last_open": None,
     "dog_detected": False,
     "dog_distance_m": None,
-    "events": [],       # list of dicts for dashboard
+    "events": [],
     "video_clips": [],
 }
 state_lock = threading.Lock()
 
 os.makedirs(CONFIG["VIDEO_DIR"], exist_ok=True)
 
-# ---------------------------------------------------------------------------
-# Encoder state  (module-level so the ISR can reach it)
-# ---------------------------------------------------------------------------
-_encoder_ticks = 0
-_encoder_lock  = threading.Lock()   # protect the tick counter from races
-_last_clk      = None               # initialised after GPIO.setup()
-_pwm           = None               # PWM object, created in gpio_setup()
+# lgpio chip handle — set in gpio_setup()
+_chip = None
 
 # ---------------------------------------------------------------------------
 # GPIO initialisation
 # ---------------------------------------------------------------------------
 def gpio_setup():
-    global _last_clk, _pwm
-
-    GPIO.setmode(GPIO.BCM)
-    GPIO.setwarnings(False)
+    global _chip
+    _chip = lgpio.gpiochip_open(0)
 
     # Relay pins — both start LOW (actuator unpowered)
-    GPIO.setup(RELAY_EXTEND_PIN,  GPIO.OUT, initial=GPIO.LOW)
-    GPIO.setup(RELAY_RETRACT_PIN, GPIO.OUT, initial=GPIO.LOW)
+    lgpio.gpio_claim_output(_chip, RELAY_EXTEND_PIN,  0)
+    lgpio.gpio_claim_output(_chip, RELAY_RETRACT_PIN, 0)
 
     # L298N motor driver pins
-    GPIO.setup(MOTOR_IN1_PIN, GPIO.OUT, initial=GPIO.LOW)
-    GPIO.setup(MOTOR_IN2_PIN, GPIO.OUT, initial=GPIO.LOW)
-    GPIO.setup(MOTOR_ENA_PIN, GPIO.OUT, initial=GPIO.LOW)
+    lgpio.gpio_claim_output(_chip, MOTOR_IN1_PIN, 0)
+    lgpio.gpio_claim_output(_chip, MOTOR_IN2_PIN, 0)
+    lgpio.gpio_claim_output(_chip, MOTOR_ENA_PIN, 0)
 
-    # Rotary encoder inputs with internal pull-ups
-    GPIO.setup(ENCODER_CLK_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-    GPIO.setup(ENCODER_DT_PIN,  GPIO.IN, pull_up_down=GPIO.PUD_UP)
-
-    # Capture initial CLK state so the first edge is interpreted correctly
-    _last_clk = GPIO.input(ENCODER_CLK_PIN)
-
-    # Attach interrupt-driven encoder callback (both edges, 2 ms debounce)
-    GPIO.add_event_detect(
-        ENCODER_CLK_PIN,
-        GPIO.BOTH,
-        callback=_encoder_callback,
-        bouncetime=2,
-    )
-
-    # Create PWM instance for ENA and start at 0 % (motor off)
-    _pwm = GPIO.PWM(MOTOR_ENA_PIN, _PWM_FREQ)
-    _pwm.start(0)
-
-    log.info("GPIO initialised (DC motor + encoder).")
+    log.info("GPIO initialised (DC motor, time-based control).")
 
 
 def gpio_cleanup():
-    if _pwm is not None:
-        _pwm.stop()
-    GPIO.cleanup()
+    if _chip is not None:
+        _motor_stop()
+        _relays_off()
+        lgpio.gpiochip_close(_chip)
     log.info("GPIO cleaned up.")
-
-# ---------------------------------------------------------------------------
-# Rotary encoder ISR
-# ---------------------------------------------------------------------------
-def _encoder_callback(channel):
-    """Interrupt-driven encoder tick counter (single-channel quadrature)."""
-    global _encoder_ticks, _last_clk
-    clk_state = GPIO.input(ENCODER_CLK_PIN)
-    dt_state  = GPIO.input(ENCODER_DT_PIN)
-    if clk_state != _last_clk:
-        with _encoder_lock:
-            if dt_state != clk_state:
-                _encoder_ticks += 1   # clockwise
-            else:
-                _encoder_ticks -= 1   # counter-clockwise
-        _last_clk = clk_state
 
 # ---------------------------------------------------------------------------
 # DC motor helpers
@@ -263,116 +201,72 @@ def _encoder_callback(channel):
 def _motor_forward(speed: int = None):
     if speed is None:
         speed = CONFIG["MOTOR_SPEED"]
-    GPIO.output(MOTOR_IN1_PIN, GPIO.HIGH)
-    GPIO.output(MOTOR_IN2_PIN, GPIO.LOW)
-    _pwm.ChangeDutyCycle(speed)
+    lgpio.gpio_write(_chip, MOTOR_IN1_PIN, 1)
+    lgpio.gpio_write(_chip, MOTOR_IN2_PIN, 0)
+    lgpio.tx_pwm(_chip, MOTOR_ENA_PIN, _PWM_FREQ, speed)
 
 
 def _motor_backward(speed: int = None):
     if speed is None:
         speed = CONFIG["MOTOR_SPEED"]
-    GPIO.output(MOTOR_IN1_PIN, GPIO.LOW)
-    GPIO.output(MOTOR_IN2_PIN, GPIO.HIGH)
-    _pwm.ChangeDutyCycle(speed)
+    lgpio.gpio_write(_chip, MOTOR_IN1_PIN, 0)
+    lgpio.gpio_write(_chip, MOTOR_IN2_PIN, 1)
+    lgpio.tx_pwm(_chip, MOTOR_ENA_PIN, _PWM_FREQ, speed)
 
 
 def _motor_stop():
-    GPIO.output(MOTOR_IN1_PIN, GPIO.LOW)
-    GPIO.output(MOTOR_IN2_PIN, GPIO.LOW)
-    _pwm.ChangeDutyCycle(0)
+    lgpio.gpio_write(_chip, MOTOR_IN1_PIN, 0)
+    lgpio.gpio_write(_chip, MOTOR_IN2_PIN, 0)
+    lgpio.gpio_write(_chip, MOTOR_ENA_PIN, 0)
 
 
 def motor_turn_handle():
     """
-    Drive the DC motor forward until the encoder reaches MOTOR_TICKS,
-    then stop.  Uses encoder feedback so the handle always travels exactly
-    the calibrated distance regardless of load or supply voltage.
+    Run the DC motor forward for MOTOR_TURN_S seconds to depress the door
+    handle, then stop.
     """
-    global _encoder_ticks
-    target = CONFIG["MOTOR_TICKS"]
-    log.info(f"DC motor: rotating handle to {target} ticks...")
-
-    with _encoder_lock:
-        _encoder_ticks = 0      # zero the counter at the start of each move
-
+    duration = CONFIG["MOTOR_TURN_S"]
+    log.info(f"DC motor: rotating handle for {duration}s...")
     _motor_forward()
-
-    # Poll until we reach (or slightly overshoot) the target tick count.
-    # A tight loop with a short sleep keeps CPU usage low.
-    while True:
-        with _encoder_lock:
-            ticks = _encoder_ticks
-        if ticks >= target:
-            break
-        time.sleep(0.005)
-
+    time.sleep(duration)
     _motor_stop()
-    log.info(f"DC motor: handle at {ticks} ticks — latch disengaged.")
+    log.info("DC motor: handle depressed — latch disengaged.")
 
 
-def motor_reset_handle(timeout_s: float = None):
+def motor_reset_handle():
     """
-    Return the handle to the neutral (zero) position using encoder feedback.
-    Drives backward until the tick counter reaches 0, with a safety timeout.
+    Run the DC motor backward for MOTOR_TURN_S seconds to return the handle
+    to neutral, then stop.
     """
-    global _encoder_ticks
-    if timeout_s is None:
-        timeout_s = CONFIG["MOTOR_RESET_TIMEOUT_S"]
-
-    log.info("DC motor: resetting handle to neutral...")
-    deadline = time.time() + timeout_s
-
+    duration = CONFIG["MOTOR_TURN_S"]
+    log.info(f"DC motor: returning handle for {duration}s...")
     _motor_backward()
-
-    while True:
-        with _encoder_lock:
-            ticks = _encoder_ticks
-        if ticks <= 2 or time.time() >= deadline:
-            break
-        time.sleep(0.005)
-
+    time.sleep(duration)
     _motor_stop()
-
-    with _encoder_lock:
-        remaining = _encoder_ticks
-        if remaining <= 2:
-            _encoder_ticks = 0
-            log.info("DC motor: handle reset to neutral.")
-        else:
-            log.warning(
-                f"DC motor: reset timed out — {remaining} ticks remaining. "
-                "Check motor power, direction, or increase MOTOR_RESET_TIMEOUT_S."
-            )
+    log.info("DC motor: handle returned to neutral.")
 
 # ---------------------------------------------------------------------------
 # Linear actuator relay helpers (polarity-swap, two-relay H-bridge)
 # ---------------------------------------------------------------------------
 def _relays_off():
     """De-energise both relays. Safe idle state — actuator unpowered."""
-    GPIO.output(RELAY_EXTEND_PIN,  GPIO.LOW)
-    GPIO.output(RELAY_RETRACT_PIN, GPIO.LOW)
+    lgpio.gpio_write(_chip, RELAY_EXTEND_PIN,  0)
+    lgpio.gpio_write(_chip, RELAY_RETRACT_PIN, 0)
 
 
 def actuator_extend():
-    """
-    Extend the linear actuator (open the door).
-    Energises RELAY_EXTEND only. RELAY_RETRACT must already be LOW.
-    """
+    """Extend the linear actuator (open the door)."""
     _relays_off()
     time.sleep(RELAY_DEAD_TIME_S)
-    GPIO.output(RELAY_EXTEND_PIN, GPIO.HIGH)
+    lgpio.gpio_write(_chip, RELAY_EXTEND_PIN, 1)
     log.debug("Relay EXTEND ON — actuator extending.")
 
 
 def actuator_retract():
-    """
-    Retract the linear actuator (close the door).
-    De-energises RELAY_EXTEND, waits for dead-time, then energises
-    RELAY_RETRACT, reversing polarity to the actuator.
-    """
+    """Retract the linear actuator (close the door)."""
     _relays_off()
     time.sleep(RELAY_DEAD_TIME_S)
-    GPIO.output(RELAY_RETRACT_PIN, GPIO.HIGH)
+    lgpio.gpio_write(_chip, RELAY_RETRACT_PIN, 1)
     log.debug("Relay RETRACT ON — actuator retracting.")
 
 
@@ -389,7 +283,7 @@ def record_clip(filename: str, duration_s: int = CONFIG["VIDEO_CLIP_S"]):
     path = os.path.join(CONFIG["VIDEO_DIR"], filename)
     cmd = [
         "libcamera-vid",
-        "-t", str(duration_s * 1000),   # milliseconds
+        "-t", str(duration_s * 1000),
         "-o", path,
         "--width", "1280",
         "--height", "720",
@@ -442,22 +336,20 @@ def open_door_sequence():
 
     log.info("--- Opening sequence START ---")
 
-    # Step 1: Turn door handle via DC motor (encoder-controlled)
+    # Step 1: Depress door handle via DC motor (timed)
     log.info("DC motor: rotating to open latch...")
     motor_turn_handle()
-    time.sleep(0.3)     # brief pause for latch to fully disengage
+    time.sleep(0.3)   # brief pause for latch to fully disengage
 
-    # Step 2: Extend linear actuator (RELAY_EXTEND ON, RELAY_RETRACT OFF)
+    # Step 2: Extend linear actuator
     log.info("Actuator EXTENDING — door opening...")
     actuator_extend()
     time.sleep(CONFIG["ACTUATOR_TRAVEL_S"])
-    actuator_stop()     # cut power once fully extended
+    actuator_stop()
 
-    # Record a video clip of the event
+    # Record video and send notification
     clip_name = now.strftime("clip_%Y%m%d_%H%M%S.h264")
     record_clip(clip_name)
-
-    # Send notification
     send_notification("🐾 Your pet is at the door — door is opening!")
 
     # Step 3: Hold door open
@@ -471,7 +363,7 @@ def open_door_sequence():
     actuator_stop()
     time.sleep(0.2)
 
-    # Step 5: Return DC motor to neutral (encoder-controlled reset)
+    # Step 5: Return DC motor to neutral (timed)
     log.info("DC motor: returning handle to neutral...")
     motor_reset_handle()
 
@@ -492,14 +384,13 @@ class BLEDelegate(DefaultDelegate):
         super().__init__()
 
     def handleDiscovery(self, dev, isNewDev, isNewData):
-        pass  # handled in scan loop
+        pass
 
 
 def rssi_to_distance(rssi: int) -> float:
     """
     Convert RSSI (dBm) to distance (metres).
     Formula: d = 10 ^ ((A - RSSI) / (10 * N))
-    where A = RSSI at 1 m, N = path-loss exponent.
     """
     A = CONFIG["RSSI_A"]
     N = CONFIG["RSSI_N"]
@@ -515,7 +406,6 @@ def ble_scan_loop():
     cooldown     = CONFIG["COOLDOWN_S"]
 
     rssi_window = deque(maxlen=3)
-
     last_trigger_time = 0.0
     door_thread = None
 
@@ -645,7 +535,6 @@ def serve_video(filename):
 def main():
     gpio_setup()
 
-    # Start BLE scan in background daemon thread
     ble_thread = threading.Thread(target=ble_scan_loop, daemon=True)
     ble_thread.start()
 
@@ -656,8 +545,8 @@ def main():
     except KeyboardInterrupt:
         log.info("Shutting down.")
     finally:
-        _motor_stop()       # ensure motor is off
-        actuator_stop()     # ensure both relays de-energised
+        _motor_stop()
+        actuator_stop()
         gpio_cleanup()
 
 
