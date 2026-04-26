@@ -60,9 +60,6 @@ def main():
     print(f"# BLE Distance Log — {COLLECTION_LIMIT} readings")
     print(f"# MAC: {mac}  |  RSSI_A: {A}  |  N: {N}  |  Actual_m: {actual_m}")
     print(f"# Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print(f"#")
-    print(f"# Select from the header row down and paste into Sheets/Excel")
-    print(f"# (Paste Special → Split by Tab if needed)")
     print()
 
     # ── Header row — tab-separated ────────────────────────────────────────────
