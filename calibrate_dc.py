@@ -40,8 +40,8 @@ MOTOR_ENA_PIN   = 12   # PWM-capable pin (hardware PWM preferred)
 MOTOR_IN1_PIN   = 24
 MOTOR_IN2_PIN   = 25
 
-ENCODER_CLK_PIN = 5    # Channel A
-ENCODER_DT_PIN  = 6    # Channel B
+ENCODER_CLK_PIN = 17    # Channel A
+ENCODER_DT_PIN  = 27    # Channel B
 
 # ── Motor settings ─────────────────────────────────────────────────────────────
 PWM_FREQ        = 1000  # Hz
