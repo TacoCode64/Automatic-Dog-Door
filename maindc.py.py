@@ -1,0 +1,665 @@
+"""
+Pet Door Main Controller
+Raspberry Pi 4B
+
+System overview:
+  - Scans for BLE beacon (dog tag) using bluepy
+  - Calculates distance from RSSI
+  - When dog is within threshold, activates opening sequence:
+      1. DC motor (L298N) rotates to turn door handle, tracked by rotary encoder
+      2. RELAY_EXTEND energised  → +12 V to actuator pin A, GND to pin B
+         (actuator extends / door opens)
+      3. 5-second hold timer
+      4. RELAY_EXTEND de-energised (brief dead-time to avoid shoot-through)
+      5. RELAY_RETRACT energised  → +12 V to actuator pin B, GND to pin A
+         (polarity reversed / actuator retracts / door closes)
+      6. RELAY_RETRACT de-energised
+      7. DC motor returns handle to neutral using encoder feedback
+  - Pi camera records video clips each opening event
+  - Sends push notification via ntfy.sh (free, no account required)
+  - Web dashboard served locally at http://<pi-ip>:5000
+
+Linear Actuator Dual-Relay Wiring (polarity-swap / H-bridge style)
+---------------------------------------------------------------------
+Use two identical SPDT 12 V relays (e.g. SRD-12VDC-SL-C).
+
+  12 V supply (+) ──┬──────────────────────────────────────┐
+                    │                                      │
+               RELAY_EXTEND                          RELAY_RETRACT
+               COM = 12 V+                          COM = 12 V+
+               NO  → Actuator Wire A                NO  → Actuator Wire B
+               NC  → (leave open)                  NC  → (leave open)
+
+  12 V supply (–) ──┬──────────────────────────────────────┐
+                    │                                      │
+               (wire to Actuator Wire B               (wire to Actuator Wire A
+                via second terminal                    via second terminal
+                on RELAY_EXTEND board)                 on RELAY_RETRACT board)
+
+  Simplified truth table:
+    RELAY_EXTEND ON,  RELAY_RETRACT OFF  →  A=+12V, B=GND  →  EXTEND
+    RELAY_EXTEND OFF, RELAY_RETRACT ON   →  A=GND,  B=+12V →  RETRACT
+    Both OFF                             →  actuator unpowered (safe idle)
+    *** NEVER energise both relays simultaneously ***
+
+DC Motor (L298N) Wiring:
+  ENA  → MOTOR_ENA_PIN  (PWM-capable GPIO, e.g. GPIO 12)
+  IN1  → MOTOR_IN1_PIN  (e.g. GPIO 24)
+  IN2  → MOTOR_IN2_PIN  (e.g. GPIO 25)
+  Motor terminals → L298N OUT1 / OUT2
+  L298N 12V → 12V supply, GND shared with Pi
+
+Rotary Encoder Wiring:
+  CLK (A) → ENCODER_CLK_PIN  (e.g. GPIO 5)
+  DT  (B) → ENCODER_DT_PIN   (e.g. GPIO 6)
+  GND     → Pi GND
+  VCC     → Pi 3.3V
+
+GPIO Pin Assignments (BCM numbering):
+  GPIO 14  -> RELAY_EXTEND  IN  (active HIGH)
+  GPIO 15  -> RELAY_RETRACT IN  (active HIGH)
+  GPIO 12  -> L298N ENA     (PWM)
+  GPIO 24  -> L298N IN1
+  GPIO 25  -> L298N IN2
+  GPIO 5   -> Rotary encoder CLK (channel A)
+  GPIO 6   -> Rotary encoder DT  (channel B)
+  Pin 2    -> 5V power (relay board VCC for both relays)
+  Pin 6    -> Ground   (relay board GND for both relays)
+  Pin 4    -> 5V power (UBEC output / L298N logic)
+  Pin 9    -> Ground   (UBEC output / L298N logic)
+  CSI port -> Pi Camera ribbon cable
+"""
+
+import time
+import threading
+import logging
+import json
+import os
+import subprocess
+from collections import deque
+from datetime import datetime
+
+import RPi.GPIO as GPIO
+from bluepy.btle import Scanner, DefaultDelegate
+from flask import Flask, jsonify, send_from_directory
+import requests
+
+# ---------------------------------------------------------------------------
+# Configuration  (edit these values to match your setup)
+# ---------------------------------------------------------------------------
+CONFIG = {
+    # BLE beacon MAC address printed on the DFRobot TEL0168 beacon
+    "BEACON_MAC": "01:00:00:00:00:00",
+
+    # RSSI calibration (run calibrate_rssi.py first)
+    # A  = RSSI at 1 meter (negative integer, e.g. -65)
+    # N  = path-loss exponent (typically 2.0 indoors)
+    "RSSI_A": -55,
+    "RSSI_N": 2.8,
+
+    # Distance in meters that triggers the opening sequence
+    "TRIGGER_DISTANCE_M": 1.5,
+
+    # How long (seconds) to keep the door open before closing
+    "DOOR_OPEN_HOLD_S": 5,
+
+    # How long (seconds) to power the actuator in each direction.
+    # This should be slightly longer than the actuator's full-stroke travel
+    # time so it reaches its end-stop.
+    "ACTUATOR_TRAVEL_S": 7.0,
+
+    # DC motor: encoder ticks to fully depress the door handle.
+    # Run calibrate_dc_motor.py to find the correct value for your handle.
+    "MOTOR_TICKS": 200,
+
+    # DC motor PWM duty cycle (0–100). Increase if the motor stalls.
+    "MOTOR_SPEED": 50,
+
+    # Encoder ticks-per-revolution (must match your encoder's spec).
+    # Common values: 20, 100, 360, 600
+    "ENCODER_TICKS_PER_REV": 20,
+
+    # Safety timeout (seconds) for the encoder-feedback reset move.
+    "MOTOR_RESET_TIMEOUT_S": 10.0,
+
+    # Minimum seconds between opening events (prevents rapid re-triggers)
+    "COOLDOWN_S": 15,
+
+    # ntfy.sh topic for push notifications (set to "" to disable)
+    "NTFY_TOPIC": "my-pet-door-12345",
+
+    # Where to save video clips
+    "VIDEO_DIR": "/home/pi/petdoor_videos",
+
+    # Length of each video clip in seconds
+    "VIDEO_CLIP_S": 15,
+
+    # Logging level: DEBUG, INFO, WARNING, ERROR
+    "LOG_LEVEL": "INFO",
+}
+
+# ---------------------------------------------------------------------------
+# GPIO pin constants
+# ---------------------------------------------------------------------------
+RELAY_EXTEND_PIN  = 14   # HIGH → actuator extends  (door opens)
+RELAY_RETRACT_PIN = 15   # HIGH → actuator retracts (door closes)
+
+# L298N DC motor driver pins
+MOTOR_ENA_PIN   = 12   # PWM-capable pin (hardware PWM preferred)
+MOTOR_IN1_PIN   = 24
+MOTOR_IN2_PIN   = 25
+
+# Rotary encoder pins
+ENCODER_CLK_PIN = 5    # Channel A
+ENCODER_DT_PIN  = 6    # Channel B
+
+# Dead-time between relay switching to prevent simultaneous closure
+RELAY_DEAD_TIME_S = 0.1
+
+# PWM carrier frequency for the motor enable pin
+_PWM_FREQ = 1000  # Hz
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=getattr(logging, CONFIG["LOG_LEVEL"]),
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("/home/pi/petdoor.log"),
+    ],
+)
+log = logging.getLogger("petdoor")
+
+# ---------------------------------------------------------------------------
+# Shared state
+# ---------------------------------------------------------------------------
+state = {
+    "door_open": False,
+    "last_open": None,
+    "dog_detected": False,
+    "dog_distance_m": None,
+    "events": [],       # list of dicts for dashboard
+    "video_clips": [],
+}
+state_lock = threading.Lock()
+
+os.makedirs(CONFIG["VIDEO_DIR"], exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Encoder state  (module-level so the ISR can reach it)
+# ---------------------------------------------------------------------------
+_encoder_ticks = 0
+_encoder_lock  = threading.Lock()   # protect the tick counter from races
+_last_clk      = None               # initialised after GPIO.setup()
+_pwm           = None               # PWM object, created in gpio_setup()
+
+# ---------------------------------------------------------------------------
+# GPIO initialisation
+# ---------------------------------------------------------------------------
+def gpio_setup():
+    global _last_clk, _pwm
+
+    GPIO.setmode(GPIO.BCM)
+    GPIO.setwarnings(False)
+
+    # Relay pins — both start LOW (actuator unpowered)
+    GPIO.setup(RELAY_EXTEND_PIN,  GPIO.OUT, initial=GPIO.LOW)
+    GPIO.setup(RELAY_RETRACT_PIN, GPIO.OUT, initial=GPIO.LOW)
+
+    # L298N motor driver pins
+    GPIO.setup(MOTOR_IN1_PIN, GPIO.OUT, initial=GPIO.LOW)
+    GPIO.setup(MOTOR_IN2_PIN, GPIO.OUT, initial=GPIO.LOW)
+    GPIO.setup(MOTOR_ENA_PIN, GPIO.OUT, initial=GPIO.LOW)
+
+    # Rotary encoder inputs with internal pull-ups
+    GPIO.setup(ENCODER_CLK_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    GPIO.setup(ENCODER_DT_PIN,  GPIO.IN, pull_up_down=GPIO.PUD_UP)
+
+    # Capture initial CLK state so the first edge is interpreted correctly
+    _last_clk = GPIO.input(ENCODER_CLK_PIN)
+
+    # Attach interrupt-driven encoder callback (both edges, 2 ms debounce)
+    GPIO.add_event_detect(
+        ENCODER_CLK_PIN,
+        GPIO.BOTH,
+        callback=_encoder_callback,
+        bouncetime=2,
+    )
+
+    # Create PWM instance for ENA and start at 0 % (motor off)
+    _pwm = GPIO.PWM(MOTOR_ENA_PIN, _PWM_FREQ)
+    _pwm.start(0)
+
+    log.info("GPIO initialised (DC motor + encoder).")
+
+
+def gpio_cleanup():
+    if _pwm is not None:
+        _pwm.stop()
+    GPIO.cleanup()
+    log.info("GPIO cleaned up.")
+
+# ---------------------------------------------------------------------------
+# Rotary encoder ISR
+# ---------------------------------------------------------------------------
+def _encoder_callback(channel):
+    """Interrupt-driven encoder tick counter (single-channel quadrature)."""
+    global _encoder_ticks, _last_clk
+    clk_state = GPIO.input(ENCODER_CLK_PIN)
+    dt_state  = GPIO.input(ENCODER_DT_PIN)
+    if clk_state != _last_clk:
+        with _encoder_lock:
+            if dt_state != clk_state:
+                _encoder_ticks += 1   # clockwise
+            else:
+                _encoder_ticks -= 1   # counter-clockwise
+        _last_clk = clk_state
+
+# ---------------------------------------------------------------------------
+# DC motor helpers
+# ---------------------------------------------------------------------------
+def _motor_forward(speed: int = None):
+    if speed is None:
+        speed = CONFIG["MOTOR_SPEED"]
+    GPIO.output(MOTOR_IN1_PIN, GPIO.HIGH)
+    GPIO.output(MOTOR_IN2_PIN, GPIO.LOW)
+    _pwm.ChangeDutyCycle(speed)
+
+
+def _motor_backward(speed: int = None):
+    if speed is None:
+        speed = CONFIG["MOTOR_SPEED"]
+    GPIO.output(MOTOR_IN1_PIN, GPIO.LOW)
+    GPIO.output(MOTOR_IN2_PIN, GPIO.HIGH)
+    _pwm.ChangeDutyCycle(speed)
+
+
+def _motor_stop():
+    GPIO.output(MOTOR_IN1_PIN, GPIO.LOW)
+    GPIO.output(MOTOR_IN2_PIN, GPIO.LOW)
+    _pwm.ChangeDutyCycle(0)
+
+
+def motor_turn_handle():
+    """
+    Drive the DC motor forward until the encoder reaches MOTOR_TICKS,
+    then stop.  Uses encoder feedback so the handle always travels exactly
+    the calibrated distance regardless of load or supply voltage.
+    """
+    global _encoder_ticks
+    target = CONFIG["MOTOR_TICKS"]
+    log.info(f"DC motor: rotating handle to {target} ticks...")
+
+    with _encoder_lock:
+        _encoder_ticks = 0      # zero the counter at the start of each move
+
+    _motor_forward()
+
+    # Poll until we reach (or slightly overshoot) the target tick count.
+    # A tight loop with a short sleep keeps CPU usage low.
+    while True:
+        with _encoder_lock:
+            ticks = _encoder_ticks
+        if ticks >= target:
+            break
+        time.sleep(0.005)
+
+    _motor_stop()
+    log.info(f"DC motor: handle at {ticks} ticks — latch disengaged.")
+
+
+def motor_reset_handle(timeout_s: float = None):
+    """
+    Return the handle to the neutral (zero) position using encoder feedback.
+    Drives backward until the tick counter reaches 0, with a safety timeout.
+    """
+    global _encoder_ticks
+    if timeout_s is None:
+        timeout_s = CONFIG["MOTOR_RESET_TIMEOUT_S"]
+
+    log.info("DC motor: resetting handle to neutral...")
+    deadline = time.time() + timeout_s
+
+    _motor_backward()
+
+    while True:
+        with _encoder_lock:
+            ticks = _encoder_ticks
+        if ticks <= 2 or time.time() >= deadline:
+            break
+        time.sleep(0.005)
+
+    _motor_stop()
+
+    with _encoder_lock:
+        remaining = _encoder_ticks
+        if remaining <= 2:
+            _encoder_ticks = 0
+            log.info("DC motor: handle reset to neutral.")
+        else:
+            log.warning(
+                f"DC motor: reset timed out — {remaining} ticks remaining. "
+                "Check motor power, direction, or increase MOTOR_RESET_TIMEOUT_S."
+            )
+
+# ---------------------------------------------------------------------------
+# Linear actuator relay helpers (polarity-swap, two-relay H-bridge)
+# ---------------------------------------------------------------------------
+def _relays_off():
+    """De-energise both relays. Safe idle state — actuator unpowered."""
+    GPIO.output(RELAY_EXTEND_PIN,  GPIO.LOW)
+    GPIO.output(RELAY_RETRACT_PIN, GPIO.LOW)
+
+
+def actuator_extend():
+    """
+    Extend the linear actuator (open the door).
+    Energises RELAY_EXTEND only. RELAY_RETRACT must already be LOW.
+    """
+    _relays_off()
+    time.sleep(RELAY_DEAD_TIME_S)
+    GPIO.output(RELAY_EXTEND_PIN, GPIO.HIGH)
+    log.debug("Relay EXTEND ON — actuator extending.")
+
+
+def actuator_retract():
+    """
+    Retract the linear actuator (close the door).
+    De-energises RELAY_EXTEND, waits for dead-time, then energises
+    RELAY_RETRACT, reversing polarity to the actuator.
+    """
+    _relays_off()
+    time.sleep(RELAY_DEAD_TIME_S)
+    GPIO.output(RELAY_RETRACT_PIN, GPIO.HIGH)
+    log.debug("Relay RETRACT ON — actuator retracting.")
+
+
+def actuator_stop():
+    """De-energise both relays — actuator coasts to stop."""
+    _relays_off()
+    log.debug("Both relays OFF — actuator stopped.")
+
+# ---------------------------------------------------------------------------
+# Camera helpers
+# ---------------------------------------------------------------------------
+def record_clip(filename: str, duration_s: int = CONFIG["VIDEO_CLIP_S"]):
+    """Record a video clip using libcamera-vid (Raspberry Pi camera)."""
+    path = os.path.join(CONFIG["VIDEO_DIR"], filename)
+    cmd = [
+        "libcamera-vid",
+        "-t", str(duration_s * 1000),   # milliseconds
+        "-o", path,
+        "--width", "1280",
+        "--height", "720",
+        "--framerate", "15",
+        "--nopreview",
+    ]
+    try:
+        subprocess.Popen(cmd)
+        log.info(f"Recording clip: {path}")
+        with state_lock:
+            state["video_clips"].append(filename)
+            if len(state["video_clips"]) > 50:
+                state["video_clips"].pop(0)
+    except Exception as e:
+        log.error(f"Camera error: {e}")
+
+# ---------------------------------------------------------------------------
+# Push notification
+# ---------------------------------------------------------------------------
+def send_notification(message: str):
+    topic = CONFIG.get("NTFY_TOPIC", "")
+    if not topic:
+        return
+    try:
+        requests.post(
+            f"https://ntfy.sh/{topic}",
+            data=message.encode("utf-8"),
+            headers={"Title": "Pet Door", "Priority": "default"},
+            timeout=5,
+        )
+        log.info(f"Notification sent: {message}")
+    except Exception as e:
+        log.warning(f"Notification failed: {e}")
+
+# ---------------------------------------------------------------------------
+# Door open/close sequence
+# ---------------------------------------------------------------------------
+def open_door_sequence():
+    """Full open-then-close sequence. Runs in its own thread."""
+    now = datetime.now()
+    with state_lock:
+        state["door_open"] = True
+        state["last_open"] = now.isoformat()
+        state["events"].insert(0, {
+            "time": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "event": "Door opened",
+        })
+        if len(state["events"]) > 100:
+            state["events"].pop()
+
+    log.info("--- Opening sequence START ---")
+
+    # Step 1: Turn door handle via DC motor (encoder-controlled)
+    log.info("DC motor: rotating to open latch...")
+    motor_turn_handle()
+    time.sleep(0.3)     # brief pause for latch to fully disengage
+
+    # Step 2: Extend linear actuator (RELAY_EXTEND ON, RELAY_RETRACT OFF)
+    log.info("Actuator EXTENDING — door opening...")
+    actuator_extend()
+    time.sleep(CONFIG["ACTUATOR_TRAVEL_S"])
+    actuator_stop()     # cut power once fully extended
+
+    # Record a video clip of the event
+    clip_name = now.strftime("clip_%Y%m%d_%H%M%S.h264")
+    record_clip(clip_name)
+
+    # Send notification
+    send_notification("🐾 Your pet is at the door — door is opening!")
+
+    # Step 3: Hold door open
+    log.info(f"Holding door open for {CONFIG['DOOR_OPEN_HOLD_S']}s...")
+    time.sleep(CONFIG["DOOR_OPEN_HOLD_S"])
+
+    # Step 4: Retract linear actuator
+    log.info("Actuator RETRACTING — door closing...")
+    actuator_retract()
+    time.sleep(CONFIG["ACTUATOR_TRAVEL_S"])
+    actuator_stop()
+    time.sleep(0.2)
+
+    # Step 5: Return DC motor to neutral (encoder-controlled reset)
+    log.info("DC motor: returning handle to neutral...")
+    motor_reset_handle()
+
+    with state_lock:
+        state["door_open"] = False
+        state["events"].insert(0, {
+            "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "event": "Door closed",
+        })
+
+    log.info("--- Opening sequence END ---")
+
+# ---------------------------------------------------------------------------
+# BLE distance calculation
+# ---------------------------------------------------------------------------
+class BLEDelegate(DefaultDelegate):
+    def __init__(self):
+        super().__init__()
+
+    def handleDiscovery(self, dev, isNewDev, isNewData):
+        pass  # handled in scan loop
+
+
+def rssi_to_distance(rssi: int) -> float:
+    """
+    Convert RSSI (dBm) to distance (metres).
+    Formula: d = 10 ^ ((A - RSSI) / (10 * N))
+    where A = RSSI at 1 m, N = path-loss exponent.
+    """
+    A = CONFIG["RSSI_A"]
+    N = CONFIG["RSSI_N"]
+    return 10 ** ((A - rssi) / (10 * N))
+
+# ---------------------------------------------------------------------------
+# BLE scan loop  (runs in its own daemon thread)
+# ---------------------------------------------------------------------------
+def ble_scan_loop():
+    scanner = Scanner().withDelegate(BLEDelegate())
+    target_mac   = CONFIG["BEACON_MAC"].lower()
+    trigger_dist = CONFIG["TRIGGER_DISTANCE_M"]
+    cooldown     = CONFIG["COOLDOWN_S"]
+
+    rssi_window = deque(maxlen=3)
+
+    last_trigger_time = 0.0
+    door_thread = None
+
+    log.info(f"BLE scan loop started. Target MAC: {target_mac}")
+
+    while True:
+        try:
+            devices = scanner.scan(1.0)
+            beacon_found = False
+
+            for dev in devices:
+                if dev.addr.lower() == target_mac:
+                    beacon_found = True
+                    rssi_window.append(dev.rssi)
+
+                    if len(rssi_window) < 3:
+                        log.debug(
+                            f"Beacon RSSI={dev.rssi} dBm — "
+                            f"building average ({len(rssi_window)}/3)"
+                        )
+                        continue
+
+                    avg_rssi = sum(rssi_window) / len(rssi_window)
+                    dist = rssi_to_distance(avg_rssi)
+
+                    with state_lock:
+                        state["dog_detected"]   = True
+                        state["dog_distance_m"] = round(dist, 2)
+
+                    log.debug(f"Beacon avg RSSI={avg_rssi:.1f} dBm  dist≈{dist:.2f}m")
+
+                    now_t     = time.time()
+                    door_busy = door_thread and door_thread.is_alive()
+                    since     = now_t - last_trigger_time
+
+                    if dist <= trigger_dist and not door_busy and since >= cooldown:
+                        log.info(f"Dog within {dist:.2f}m — triggering door.")
+                        last_trigger_time = now_t
+                        door_thread = threading.Thread(
+                            target=open_door_sequence, daemon=True
+                        )
+                        door_thread.start()
+
+            if not beacon_found:
+                with state_lock:
+                    state["dog_detected"]   = False
+                    state["dog_distance_m"] = None
+
+        except Exception as e:
+            log.error(f"BLE scan error: {e}")
+            time.sleep(2)
+
+# ---------------------------------------------------------------------------
+# Flask web dashboard
+# ---------------------------------------------------------------------------
+app = Flask(__name__)
+
+DASHBOARD_HTML = """
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pet Door Dashboard</title>
+<style>
+  body { font-family: Arial, sans-serif; background:#f4f4f4; margin:0; padding:20px; }
+  h1   { color:#333; }
+  .card { background:#fff; border-radius:8px; padding:16px; margin-bottom:16px;
+          box-shadow:0 2px 4px rgba(0,0,0,.1); }
+  .status-open   { color:#e74c3c; font-weight:bold; }
+  .status-closed { color:#27ae60; font-weight:bold; }
+  table { border-collapse:collapse; width:100%; }
+  th,td { text-align:left; padding:8px; border-bottom:1px solid #ddd; }
+  th    { background:#f0f0f0; }
+</style>
+<script>
+  function refresh() {
+    fetch('/api/state').then(r=>r.json()).then(data=>{
+      document.getElementById('door-status').textContent =
+        data.door_open ? 'OPEN' : 'CLOSED';
+      document.getElementById('door-status').className =
+        data.door_open ? 'status-open' : 'status-closed';
+      document.getElementById('dog-dist').textContent =
+        data.dog_distance_m !== null ? data.dog_distance_m + ' m' : 'Not detected';
+      let rows = data.events.slice(0,20).map(e=>
+        `<tr><td>${e.time}</td><td>${e.event}</td></tr>`).join('');
+      document.getElementById('events-body').innerHTML = rows;
+    });
+  }
+  setInterval(refresh, 2000);
+  window.onload = refresh;
+</script>
+</head>
+<body>
+<h1>🐾 Pet Door Dashboard</h1>
+<div class="card">
+  <h2>Door Status: <span id="door-status">—</span></h2>
+  <p>Dog distance: <strong><span id="dog-dist">—</span></strong></p>
+</div>
+<div class="card">
+  <h2>Recent Events</h2>
+  <table>
+    <thead><tr><th>Time</th><th>Event</th></tr></thead>
+    <tbody id="events-body"></tbody>
+  </table>
+</div>
+</body>
+</html>
+"""
+
+@app.route("/")
+def dashboard():
+    return DASHBOARD_HTML
+
+@app.route("/api/state")
+def api_state():
+    with state_lock:
+        return jsonify(dict(state))
+
+@app.route("/videos/<path:filename>")
+def serve_video(filename):
+    return send_from_directory(CONFIG["VIDEO_DIR"], filename)
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+def main():
+    gpio_setup()
+
+    # Start BLE scan in background daemon thread
+    ble_thread = threading.Thread(target=ble_scan_loop, daemon=True)
+    ble_thread.start()
+
+    log.info("Pet Door controller running. Dashboard at http://localhost:5000")
+
+    try:
+        app.run(host="0.0.0.0", port=5000, debug=False, use_reloader=False)
+    except KeyboardInterrupt:
+        log.info("Shutting down.")
+    finally:
+        _motor_stop()       # ensure motor is off
+        actuator_stop()     # ensure both relays de-energised
+        gpio_cleanup()
+
+
+if __name__ == "__main__":
+    main()
