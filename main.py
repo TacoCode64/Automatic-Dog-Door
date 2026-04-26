@@ -402,7 +402,9 @@ def ble_scan_loop():
             devices = scanner.scan(1.0)  # scan for 1 second
             beacon_found = False
           
-    if dev.addr.lower() == target_mac:
+            for dev in devices:
+
+  if dev.addr.lower() == target_mac:
         beacon_found = True
         rssi_window.append(dev.rssi)
 
