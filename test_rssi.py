@@ -30,6 +30,9 @@ Example — standing 2 m away, using calibrated values:
 
 import sys
 import csv
+import os
+import http.server
+import socketserver
 from datetime import datetime
 from bluepy.btle import Scanner, DefaultDelegate
 
