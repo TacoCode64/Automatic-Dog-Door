@@ -79,7 +79,7 @@ CONFIG = {
     # RSSI calibration (run calibrate_rssi.py first)
     # A  = RSSI at 1 meter (negative integer, e.g. -65)
     # N  = path-loss exponent (typically 2.0 indoors)
-    "RSSI_A": -56,
+    "RSSI_A": -66,
     "RSSI_N": 2.0,
 
     # Distance in meters that triggers the opening sequence
