@@ -62,6 +62,7 @@ import logging
 import json
 import os
 import subprocess
+from collections import deque
 from datetime import datetime
 
 import RPi.GPIO as GPIO
@@ -388,6 +389,9 @@ def ble_scan_loop():
     trigger_dist = CONFIG["TRIGGER_DISTANCE_M"]
     cooldown = CONFIG["COOLDOWN_S"]
 
+  
+    rssi_window = deque(maxlen=3)
+
     last_trigger_time = 0.0
     door_thread = None
 
@@ -397,22 +401,32 @@ def ble_scan_loop():
         try:
             devices = scanner.scan(1.0)  # scan for 1 second
             beacon_found = False
+from collections import deque
 
-            for dev in devices:
-                if dev.addr.lower() == target_mac:
-                    beacon_found = True
-                    dist = rssi_to_distance(dev.rssi)
-                    with state_lock:
-                        state["dog_detected"] = True
-                        state["dog_distance_m"] = round(dist, 2)
+        for dev in devices:
+    if dev.addr.lower() == target_mac:
+        beacon_found = True
+        rssi_window.append(dev.rssi)
 
-                    log.debug(f"Beacon RSSI={dev.rssi} dBm  dist≈{dist:.2f}m")
+        # Only compute distance once we have a full 3-second window
+        if len(rssi_window) < 3:
+            log.debug(f"Beacon RSSI={dev.rssi} dBm — building average ({len(rssi_window)}/3)")
+            continue
 
-                    now = time.time()
-                    door_busy = door_thread and door_thread.is_alive()
-                    since_last = now - last_trigger_time
+        avg_rssi = sum(rssi_window) / len(rssi_window)
+        dist = rssi_to_distance(avg_rssi)
 
-                    if dist <= trigger_dist and not door_busy and since_last >= cooldown:
+        with state_lock:
+            state["dog_detected"] = True
+            state["dog_distance_m"] = round(dist, 2)
+
+        log.debug(f"Beacon avg RSSI={avg_rssi:.1f} dBm  dist≈{dist:.2f}m")
+
+        now = time.time()
+        door_busy = door_thread and door_thread.is_alive()
+        since_last = now - last_trigger_time
+
+        if dist <= trigger_dist and not door_busy and since_last >= cooldown:
                         log.info(f"Dog within {dist:.2f}m — triggering door.")
                         last_trigger_time = now
                         door_thread = threading.Thread(
