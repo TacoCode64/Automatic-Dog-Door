@@ -389,7 +389,6 @@ def ble_scan_loop():
     trigger_dist = CONFIG["TRIGGER_DISTANCE_M"]
     cooldown = CONFIG["COOLDOWN_S"]
 
-  
     rssi_window = deque(maxlen=3)
 
     last_trigger_time = 0.0
@@ -398,7 +397,11 @@ def ble_scan_loop():
     log.info(f"BLE scan loop started. Target MAC: {target_mac}")
 
     while True:
-          for dev in devices:
+        try:
+            devices = scanner.scan(1.0)  # scan for 1 second
+            beacon_found = False
+            
+            for dev in devices:
                 if dev.addr.lower() == target_mac:
                     beacon_found = True
                     rssi_window.append(dev.rssi)
@@ -433,6 +436,10 @@ def ble_scan_loop():
                 with state_lock:
                     state["dog_detected"] = False
                     state["dog_distance_m"] = None
+
+        except Exception as e:
+            log.error(f"BLE scan error: {e}")
+            time.sleep(2)
 
         except Exception as e:
             log.error(f"BLE scan error: {e}")
