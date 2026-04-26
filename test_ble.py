@@ -14,6 +14,11 @@ Arguments:
     N       — path-loss exponent (default 2.0)
 
 Output is also saved to ble_log.csv in the current directory.
+
+Note: actual update rate is limited by the beacon's advertisement interval
+(typically 100–1000 ms, set in beacon firmware).  The 0.1 s scan window
+means the script prints as soon as each packet arrives — up to ~10/s —
+rather than batching them into 1-second buckets.
 """
 
 import sys
@@ -45,16 +50,20 @@ def main():
         writer.writerow(["timestamp", "rssi_dbm", "distance_m"])
 
         try:
+            scanner.start()
             while True:
-                for dev in scanner.scan(0.1):
-                    if dev.addr.lower() == mac:
-                        dist = rssi_to_dist(dev.rssi, A, N)
-                        ts   = datetime.now().strftime("%H:%M:%S.%f")
-                        print(f"{ts:>1}  {dev.rssi:>6}  {dist:>14.2f}")
-                        writer.writerow([ts, dev.rssi, round(dist, 3)])
-                        f.flush()
+                scanner.process(0.1)        # block for 100 ms, no socket overhead
+                dev = scanner.scanned.get(mac)
+                if dev is not None:
+                    dist = rssi_to_dist(dev.rssi, A, N)
+                    ts   = datetime.now().strftime("%H:%M:%S.%f")
+                    print(f"{ts:>1}  {dev.rssi:>6}  {dist:>14.2f}")
+                    writer.writerow([ts, dev.rssi, round(dist, 3)])
+                    f.flush()
         except KeyboardInterrupt:
             print("\nLog saved to ble_log.csv")
+        finally:
+            scanner.stop()
 
 if __name__ == "__main__":
     main()
