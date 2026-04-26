@@ -398,7 +398,7 @@ def ble_scan_loop():
     log.info(f"BLE scan loop started. Target MAC: {target_mac}")
 
     while True:
-for dev in devices:
+          for dev in devices:
                 if dev.addr.lower() == target_mac:
                     beacon_found = True
                     rssi_window.append(dev.rssi)
