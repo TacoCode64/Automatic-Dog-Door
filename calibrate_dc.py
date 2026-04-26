@@ -45,7 +45,7 @@ ENCODER_DT_PIN  = 6    # Channel B
 
 # ── Motor settings ─────────────────────────────────────────────────────────────
 PWM_FREQ        = 1000  # Hz
-MOTOR_SPEED     = 50    # Duty cycle 0–100 (start low, increase if stalling)
+MOTOR_SPEED     = 100    # Duty cycle 0–100 (start low, increase if stalling)
 
 # ── Encoder settings ───────────────────────────────────────────────────────────
 TICKS_PER_REV   = 20    # PPR of your encoder (pulses per revolution, rising edges only)
