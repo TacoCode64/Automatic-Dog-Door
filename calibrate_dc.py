@@ -55,7 +55,7 @@ TICKS_PER_REV   = 20    # PPR of your encoder (pulses per revolution, rising edg
 # ── GPIO setup ─────────────────────────────────────────────────────────────────
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
-
+GPIO.cleanup()
 GPIO.setup(MOTOR_IN1_PIN, GPIO.OUT, initial=GPIO.LOW)
 GPIO.setup(MOTOR_IN2_PIN, GPIO.OUT, initial=GPIO.LOW)
 GPIO.setup(MOTOR_ENA_PIN, GPIO.OUT, initial=GPIO.LOW)
@@ -86,7 +86,7 @@ GPIO.add_event_detect(
     ENCODER_CLK_PIN,
     GPIO.BOTH,
     callback=_encoder_callback,
-    bouncetime=2,
+    bouncetime=50,
 )
 
 # ── Motor helpers ──────────────────────────────────────────────────────────────
