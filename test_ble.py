@@ -31,8 +31,8 @@ def rssi_to_dist(rssi, A, N):
 
 def main():
     mac    = sys.argv[1].lower() if len(sys.argv) > 1 else "aa:bb:cc:dd:ee:ff"
-    A      = int(sys.argv[2])    if len(sys.argv) > 2 else -65
-    N      = float(sys.argv[3])  if len(sys.argv) > 3 else 2.0
+    A      = int(sys.argv[2])    if len(sys.argv) > 2 else -55
+    N      = float(sys.argv[3])  if len(sys.argv) > 3 else 2.8
 
     scanner = Scanner().withDelegate(_D())
     print(f"Scanning for {mac}  (RSSI_A={A}, N={N})")
