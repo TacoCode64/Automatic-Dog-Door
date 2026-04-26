@@ -60,8 +60,8 @@ GPIO.setup(MOTOR_IN1_PIN, GPIO.OUT, initial=GPIO.LOW)
 GPIO.setup(MOTOR_IN2_PIN, GPIO.OUT, initial=GPIO.LOW)
 GPIO.setup(MOTOR_ENA_PIN, GPIO.OUT, initial=GPIO.LOW)
 
-GPIO.setup(ENCODER_CLK_PIN, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-GPIO.setup(ENCODER_DT_PIN,  GPIO.IN, pull_up_down=GPIO.PUD_UP)
+GPIO.setup(ENCODER_CLK_PIN, GPIO.IN, pull_up_down=GPIO.PUD_OFF)
+GPIO.setup(ENCODER_DT_PIN,  GPIO.IN, pull_up_down=GPIO.PUD_OFF)
 
 pwm = GPIO.PWM(MOTOR_ENA_PIN, PWM_FREQ)
 pwm.start(0)
