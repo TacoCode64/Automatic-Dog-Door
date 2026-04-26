@@ -80,7 +80,7 @@ CONFIG = {
     # A  = RSSI at 1 meter (negative integer, e.g. -65)
     # N  = path-loss exponent (typically 2.0 indoors)
     "RSSI_A": -55,
-    "RSSI_N": 3.5,
+    "RSSI_N": 2.8,
 
     # Distance in meters that triggers the opening sequence
     "TRIGGER_DISTANCE_M": 1.5,
