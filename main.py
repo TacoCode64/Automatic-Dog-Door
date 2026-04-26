@@ -427,9 +427,7 @@ def ble_scan_loop():
                     if dist <= trigger_dist and not door_busy and since_last >= cooldown:
                         log.info(f"Dog within {dist:.2f}m — triggering door.")
                         last_trigger_time = now
-                        door_thread = threading.Thread(
-                            target=open_door_sequence, daemon=True
-                        )
+                        door_thread = threading.Thread(target=open_door_sequence, daemon=True)
                         door_thread.start()
 
             if not beacon_found:
@@ -440,23 +438,6 @@ def ble_scan_loop():
         except Exception as e:
             log.error(f"BLE scan error: {e}")
             time.sleep(2)
-
-        except Exception as e:
-            log.error(f"BLE scan error: {e}")
-            time.sleep(2)
-                            target=open_door_sequence, daemon=True
-                        )
-                        door_thread.start()
-
-            if not beacon_found:
-                with state_lock:
-                    state["dog_detected"] = False
-                    state["dog_distance_m"] = None
-
-        except Exception as e:
-            log.error(f"BLE scan error: {e}")
-            time.sleep(2)
-
 # ---------------------------------------------------------------------------
 # Flask web dashboard
 # ---------------------------------------------------------------------------
