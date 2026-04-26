@@ -401,7 +401,6 @@ def ble_scan_loop():
         try:
             devices = scanner.scan(1.0)  # scan for 1 second
             beacon_found = False
-from collections import deque
 
         for dev in devices:
     if dev.addr.lower() == target_mac:
