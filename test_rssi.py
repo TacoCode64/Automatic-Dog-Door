@@ -30,9 +30,6 @@ Example — standing 2 m away, using calibrated values:
 
 import sys
 import csv
-import os
-import http.server
-import socketserver
 from datetime import datetime
 from bluepy.btle import Scanner, DefaultDelegate
 
@@ -89,16 +86,6 @@ def main():
     print()
     print(f"# Done — {COLLECTION_LIMIT} readings collected. Log saved to ble_log.csv")
     
-    import http.server, socketserver, os, threading
-
-os.chdir(os.path.dirname(os.path.abspath("ble_log.csv")))
-PORT = 8080
-with socketserver.TCPServer(("", PORT), http.server.SimpleHTTPRequestHandler) as httpd:
-    print(f"\n# Download at: http://<pi-ip>:{PORT}/ble_log.csv")
-    print("# Press Ctrl+C when done.")
-    httpd.serve_forever()
-
-
 if __name__ == "__main__":
     main()
 
