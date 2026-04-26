@@ -46,7 +46,7 @@ def main():
 
         try:
             while True:
-                for dev in scanner.scan(1.0):
+                for dev in scanner.scan(0.1):
                     if dev.addr.lower() == mac:
                         dist = rssi_to_dist(dev.rssi, A, N)
                         ts   = datetime.now().strftime("%H:%M:%S.%f")
