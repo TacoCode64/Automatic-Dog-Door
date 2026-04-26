@@ -49,8 +49,8 @@ def main():
                 for dev in scanner.scan(1.0):
                     if dev.addr.lower() == mac:
                         dist = rssi_to_dist(dev.rssi, A, N)
-                        ts   = datetime.now().strftime("%H:%M:%S")
-                        print(f"{ts:>10}  {dev.rssi:>6}  {dist:>14.2f}")
+                        ts   = datetime.now().strftime("%H:%M:%S.%f")
+                        print(f"{ts:>1}  {dev.rssi:>6}  {dist:>14.2f}")
                         writer.writerow([ts, dev.rssi, round(dist, 3)])
                         f.flush()
         except KeyboardInterrupt:
