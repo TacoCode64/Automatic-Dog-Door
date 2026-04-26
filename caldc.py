@@ -72,7 +72,7 @@ def _restore(fd, old):
     termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 # ── State ──────────────────────────────────────────────────────────────────────
-PULSE_S        = 0.5   # seconds the motor runs per keypress — adjust freely
+PULSE_S        = 1   # seconds the motor runs per keypress — adjust freely
 total_forward_s = 0.0  # accumulated forward time
 
 # ── Main calibration loop ──────────────────────────────────────────────────────
