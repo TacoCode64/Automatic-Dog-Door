@@ -33,8 +33,8 @@ import lgpio
 
 # ── Pin configuration ──────────────────────────────────────────────────────────
 MOTOR_ENA_PIN = 12
-MOTOR_IN1_PIN = 24
-MOTOR_IN2_PIN = 25
+MOTOR_IN1_PIN = 5
+MOTOR_IN2_PIN = 6
 
 # ── Motor settings ─────────────────────────────────────────────────────────────
 PWM_FREQ    = 1000   # Hz
