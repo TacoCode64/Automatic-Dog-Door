@@ -129,8 +129,8 @@ RELAY_EXTEND_PIN  = 14   # HIGH → actuator extends  (door opens)
 RELAY_RETRACT_PIN = 15   # HIGH → actuator retracts (door closes)
 
 MOTOR_ENA_PIN = 12   # PWM-capable pin
-MOTOR_IN1_PIN = 24
-MOTOR_IN2_PIN = 25
+MOTOR_IN1_PIN = 5
+MOTOR_IN2_PIN = 6
 
 # Dead-time between relay switching to prevent simultaneous closure
 RELAY_DEAD_TIME_S = 0.1
