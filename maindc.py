@@ -200,7 +200,7 @@ def gpio_cleanup():
 # ---------------------------------------------------------------------------
 def _motor_forward(speed: int = None):
     if speed is None:
-        speed = CONFIG["MOTOR_SPEED"]
+        speed = CONFIG[100]
     lgpio.gpio_write(_chip, MOTOR_IN1_PIN, 1)
     lgpio.gpio_write(_chip, MOTOR_IN2_PIN, 0)
     lgpio.tx_pwm(_chip, MOTOR_ENA_PIN, _PWM_FREQ, speed)
@@ -208,7 +208,7 @@ def _motor_forward(speed: int = None):
 
 def _motor_backward(speed: int = None):
     if speed is None:
-        speed = CONFIG["MOTOR_SPEED"]
+        speed = CONFIG[100]
     lgpio.gpio_write(_chip, MOTOR_IN1_PIN, 0)
     lgpio.gpio_write(_chip, MOTOR_IN2_PIN, 1)
     lgpio.tx_pwm(_chip, MOTOR_ENA_PIN, _PWM_FREQ, speed)
@@ -225,7 +225,7 @@ def motor_turn_handle():
     Run the DC motor forward for MOTOR_TURN_S seconds to depress the door
     handle, then stop.
     """
-    duration = CONFIG["MOTOR_TURN_S"]
+    duration = CONFIG[2]
     log.info(f"DC motor: rotating handle for {duration}s...")
     _motor_forward()
     time.sleep(duration)
