@@ -1,14 +1,8 @@
-# Raspberry Pi Python dependencies
-# Install with:  pip3 install -r requirements.txt
-
-# BLE (Bluetooth Low Energy) scanning
 bluepy==1.3.0
-
-# Web dashboard
 flask==3.0.3
-
-# Push notifications (ntfy.sh — no account needed)
 requests==2.31.0
-
-# GPIO  (pre-installed on Raspberry Pi OS, listed for completeness)
 RPi.GPIO==0.7.1
+lgpio==0.2.2.0
+numpy==1.26.4
+opencv-python-headless==4.9.0.80
+picamera2==0.3.19
