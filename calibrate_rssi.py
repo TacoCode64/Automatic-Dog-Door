@@ -1,38 +1,3 @@
-"""
-calibrate_rssi.py  —  Raspberry Pi
-=====================================
-Systematic calibration of RSSI_A and RSSI_N for BLE distance estimation.
-
-Formula used throughout:  distance = 10 ^ ((A - RSSI) / (10 * N))
-
-Strategy
---------
-Phase 1 — Data collection
-  Stand at known distances (1 m, 2 m, 3 m) and collect average RSSI at each.
-  These three measured RSSI values are the raw data everything else is derived from.
-
-Phase 2 — Grid sweep (isolate A, then isolate N)
-  Sweeps A from -55 to -65 in 0.5 steps while holding N fixed at the midpoint (3.4).
-  Sweeps N from 2.8 to 4.0 in 0.1 steps while holding A fixed at the midpoint (-60).
-  For each combination, compute estimated distance at every measured point and
-  compare to the actual distance. Prints mean absolute error (MAE) for each.
-
-Phase 3 — Combined best-fit search
-  Tests every (A, N) combination in the full grid and finds the pair with the
-  lowest MAE across all measured distances.
-
-Phase 4 — Recommendation
-  Prints the best A and N values to enter into main.py CONFIG.
-  Saves all results to rssi_calibration.csv for review.
-
-Usage:
-    sudo python3 calibrate_rssi.py <BEACON_MAC>
-    e.g.  sudo python3 calibrate_rssi.py AA:BB:CC:DD:EE:FF
-
-Requirements:
-    pip3 install bluepy
-"""
-
 import sys
 import time
 import math
@@ -40,18 +5,16 @@ import csv
 import statistics
 from bluepy.btle import Scanner, DefaultDelegate
 
-# ── Configuration ─────────────────────────────────────────────────────────────
-SAMPLES_PER_POSITION = 30      # RSSI readings averaged per distance
-SCAN_WINDOW_S        = 1.0     # seconds per BLE scan call
-DISTANCES_M          = [1.0, 2.0, 3.0]   # known stand positions (metres)
+SAMPLES_PER_POSITION = 30
+SCAN_WINDOW_S        = 1.0
+DISTANCES_M          = [1.0, 2.0, 3.0]
 
-A_MIN, A_MAX, A_STEP = 55, 65, 0.5       # sweep range for A (stored as positive)
-N_MIN, N_MAX, N_STEP = 2.8, 4.0, 0.1    # sweep range for N
+A_MIN, A_MAX, A_STEP = 55, 65, 0.5
+N_MIN, N_MAX, N_STEP = 2.8, 4.0, 0.1
 
-A_MID = (A_MIN + A_MAX) / 2   # 60.0 — held fixed when isolating N
-N_MID = (N_MIN + N_MAX) / 2   # 3.4  — held fixed when isolating A
+A_MID = (A_MIN + A_MAX) / 2
+N_MID = (N_MIN + N_MAX) / 2
 
-# ── BLE helpers ───────────────────────────────────────────────────────────────
 class _D(DefaultDelegate):
     def __init__(self): super().__init__()
     def handleDiscovery(self, *a): pass
@@ -74,7 +37,6 @@ def collect_rssi(mac: str, n_samples: int) -> float:
     print(f" done.  mean={mean:.1f} dBm  stdev=±{stdev:.1f}")
     return mean
 
-# ── Distance formula ──────────────────────────────────────────────────────────
 def rssi_to_dist(rssi: float, A: float, N: float) -> float:
     """A is passed as positive (e.g. 60); negated inside formula."""
     return 10 ** ((-A - rssi) / (10 * N))
@@ -87,7 +49,6 @@ def mae(measured_rssi_list, actual_distances, A, N):
         errors.append(abs(estimated - actual))
     return statistics.mean(errors)
 
-# ── Sweep helpers ─────────────────────────────────────────────────────────────
 def frange(start, stop, step):
     """Inclusive float range."""
     vals = []
@@ -112,7 +73,6 @@ def sweep(rssi_readings, label_var, fixed_label, fixed_val,
     results.sort(key=lambda x: x[1])
     return results
 
-# ── Pretty print table ────────────────────────────────────────────────────────
 def print_sweep_table(results, var_name, fixed_name, fixed_val, best_n=5):
     print(f"\n  {var_name} sweep  ({fixed_name} fixed at -{fixed_val})")
     print(f"  {'─'*42}")
@@ -123,7 +83,6 @@ def print_sweep_table(results, var_name, fixed_name, fixed_val, best_n=5):
         print(f"  {rank:<6} -{val:<10.1f} {err:<12.4f}{note}")
     print(f"  {'─'*42}")
 
-# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     if len(sys.argv) < 2:
         print("Usage: sudo python3 calibrate_rssi.py <BEACON_MAC>")
@@ -135,7 +94,6 @@ def main():
     print(f"  Beacon MAC: {mac}")
     print(f"{'='*58}\n")
 
-    # ── PHASE 1: Data collection ───────────────────────────────────────────────
     print("PHASE 1 — Collect RSSI at known distances")
     print("  You will be prompted to stand at each distance in turn.\n")
 
@@ -151,7 +109,6 @@ def main():
     for d, r in zip(DISTANCES_M, rssi_readings):
         print(f"    {d:.0f} m  →  {r:.2f} dBm")
 
-    # ── PHASE 2A: Isolate A (N fixed at midpoint) ──────────────────────────────
     print(f"\n{'='*58}")
     print("PHASE 2A — Isolate A  (N held fixed at midpoint = -N_MID)")
     print(f"           Sweeping A from -{A_MIN} to -{A_MAX} in {A_STEP} steps")
@@ -163,7 +120,6 @@ def main():
     print_sweep_table(A_sweep_results, "A", "N", N_MID)
     best_A_isolated = A_sweep_results[0][0]
 
-    # ── PHASE 2B: Isolate N (A fixed at midpoint) ──────────────────────────────
     print(f"\n{'='*58}")
     print("PHASE 2B — Isolate N  (A held fixed at midpoint = -A_MID)")
     print(f"           Sweeping N from {N_MIN} to {N_MAX} in {N_STEP} steps")
@@ -183,7 +139,6 @@ def main():
     print(f"  {'─'*42}")
     best_N_isolated = N_sweep_results[0][0]
 
-    # ── PHASE 3: Full grid search ──────────────────────────────────────────────
     print(f"\n{'='*58}")
     print("PHASE 3 — Full grid search  (all A × N combinations)")
     print(f"{'='*58}")
@@ -206,7 +161,6 @@ def main():
         print(f"  {rank:<6} -{A:<10.1f} {N:<10.2f} {err:<12.4f}{note}")
     print(f"  {'─'*50}")
 
-    # ── PHASE 4: Recommendation ────────────────────────────────────────────────
     print(f"\n{'='*58}")
     print("PHASE 4 — Recommendation")
     print(f"{'='*58}")
@@ -217,15 +171,10 @@ def main():
     print(f"    Best A: -{best_A:.1f}")
     print(f"    Best N: {best_N:.2f}")
     print(f"    MAE:    {best_err:.4f} m  ({best_err*100:.1f} cm average error)")
-    print(f"\n  ┌─────────────────────────────────────────────┐")
-    print(f"  │  Enter these values in main.py CONFIG:      │")
-    print(f"  │                                             │")
-    print(f"  │    \"RSSI_A\": -{best_A:.1f},".ljust(46) + "│")
-    print(f"  │    \"RSSI_N\":  {best_N:.2f},".ljust(46) + "│")
-    print(f"  │                                             │")
-    print(f"  └─────────────────────────────────────────────┘")
+    print(f" Enter these values in main.py CONFIG:")
+    print(f" \"RSSI_A\": -{best_A:.1f},".ljust(46) )
+    print(f" \"RSSI_N\":  {best_N:.2f},".ljust(46) )
 
-    # ── Save CSV ───────────────────────────────────────────────────────────────
     csv_path = "rssi_calibration.csv"
     with open(csv_path, "w", newline="") as f:
         writer = csv.writer(f)
