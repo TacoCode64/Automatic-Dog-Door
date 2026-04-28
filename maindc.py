@@ -90,7 +90,7 @@ CONFIG = {
     "RSSI_N": 2.8,
 
     # Distance in meters that triggers the opening sequence
-    "TRIGGER_DISTANCE_M": 2.1,
+    "TRIGGER_DISTANCE_M": 1.8,
 
     # How long (seconds) to keep the door open before closing
     "DOOR_OPEN_HOLD_S": 5,
@@ -101,7 +101,7 @@ CONFIG = {
 
     # How long (seconds) to run the DC motor to fully depress the door handle.
     # Run calibrate_dc.py to find the correct value for your setup.
-    "MOTOR_TURN_S": 4,
+    "MOTOR_TURN_S": -5,
 
     # DC motor PWM duty cycle (0–100). Increase if the motor stalls.
     "MOTOR_SPEED": 50,
