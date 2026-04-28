@@ -101,7 +101,7 @@ CONFIG = {
 
     # How long (seconds) to run the DC motor to fully depress the door handle.
     # Run calibrate_dc.py to find the correct value for your setup.
-    "MOTOR_TURN_S": -5,
+    "MOTOR_TURN_S": 5,
 
     # DC motor PWM duty cycle (0–100). Increase if the motor stalls.
     "MOTOR_SPEED": 50,
