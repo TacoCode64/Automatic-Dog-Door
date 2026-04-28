@@ -81,7 +81,7 @@ import requests
 # ---------------------------------------------------------------------------
 CONFIG = {
     # BLE beacon MAC address printed on the DFRobot TEL0168 beacon
-    "BEACON_MAC": "01:00:00:00:00:00",
+    "BEACON_MAC": "06:05:04:03:02:01",
 
     # RSSI calibration (run calibrate_rssi.py first)
     # A  = RSSI at 1 meter (negative integer, e.g. -65)
