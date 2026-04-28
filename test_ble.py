@@ -1,26 +1,3 @@
-"""
-test_ble.py  —  Raspberry Pi
-==============================
-Continuously prints the detected distance of the BLE beacon.
-Useful for Test 3 (Element H III.3): walk the beacon toward the door
-and record RSSI vs measured distance in a spreadsheet.
-
-Usage:
-    python3 test_ble.py AA:BB:CC:DD:EE:FF [-65] [2.0]
-
-Arguments:
-    MAC     — beacon MAC address
-    RSSI_A  — RSSI at 1 m (from calibrate_rssi.py, default -65)
-    N       — path-loss exponent (default 2.0)
-
-Output is also saved to ble_log.csv in the current directory.
-
-Note: actual update rate is limited by the beacon's advertisement interval
-(typically 100–1000 ms, set in beacon firmware).  The 0.1 s scan window
-means the script prints as soon as each packet arrives — up to ~10/s —
-rather than batching them into 1-second buckets.
-"""
-
 import sys
 import time
 import csv
@@ -52,7 +29,7 @@ def main():
         try:
             scanner.start()
             while True:
-                scanner.process(0.1)        # block for 100 ms, no socket overhead
+                scanner.process(0.1)
                 dev = scanner.scanned.get(mac)
                 if dev is not None:
                     dist = rssi_to_dist(dev.rssi, A, N)
