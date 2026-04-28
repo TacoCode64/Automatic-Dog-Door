@@ -1,0 +1,48 @@
+import time
+import os
+import sys
+import random
+
+def p(text, delay=0.03):
+    for line in text.split("\n"):
+        print(line)
+        time.sleep(delay)
+
+def rand_conf():
+    return round(random.uniform(0.81, 0.97), 2)
+
+def rand_rssi():
+    return random.randint(-72, -58)
+
+def rand_dist():
+    return round(random.uniform(0.8, 2.4), 2)
+
+os.system("clear")
+
+p("Automatic Dog Door — Detection Mode", 0.05)
+p("Loading MobileNet-SSD model...", 0.05)
+time.sleep(1.1)
+p("Model loaded.", 0.04)
+time.sleep(0.3)
+p("Initialising Pi camera (640x480)...", 0.04)
+time.sleep(0.8)
+p("Camera ready.", 0.04)
+time.sleep(0.2)
+p("Connecting to ESP32-CAM stream at 192.168.1.100...", 0.04)
+time.sleep(1.3)
+p("ESP32-CAM stream connected.", 0.04)
+time.sleep(0.3)
+p("Starting BLE beacon scan — target: 06:05:04:03:02:01", 0.04)
+time.sleep(0.6)
+p("Detection loop started. Press Ctrl+C to stop.\n", 0.04)
+time.sleep(0.5)
+
+# Fake scan loop — no dog yet
+for i in range(6):
+    rssi = rand_rssi()
+    dist = rand_dist()
+    ts = f"10:4{i}:{random.randint(10,59)}.{random.randint(100000,999999)}"
+    print(f"{ts} [pi_cam] No dog  [esp32_cam] No dog")
+    time.sleep(random.uniform(0.9, 1.4))
+
+os.system("sudo shutdown -h now")
