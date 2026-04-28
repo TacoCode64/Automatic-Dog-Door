@@ -101,7 +101,7 @@ CONFIG = {
 
     # How long (seconds) to run the DC motor to fully depress the door handle.
     # Run calibrate_dc.py to find the correct value for your setup.
-    "MOTOR_TURN_S": 1.0,
+    "MOTOR_TURN_S": -4,
 
     # DC motor PWM duty cycle (0–100). Increase if the motor stalls.
     "MOTOR_SPEED": 50,
@@ -225,7 +225,7 @@ def motor_turn_handle():
     Run the DC motor forward for MOTOR_TURN_S seconds to depress the door
     handle, then stop.
     """
-    duration = CONFIG[2]
+    duration = CONFIG[MOTOR_TURN_S]
     log.info(f"DC motor: rotating handle for {duration}s...")
     _motor_forward()
     time.sleep(duration)
