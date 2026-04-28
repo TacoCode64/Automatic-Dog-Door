@@ -1,78 +1,3 @@
-"""
-Pet Door Main Controller
-Raspberry Pi 4B  —  lgpio edition (kernel 6.6+)
-
-System overview:
-  - Scans for BLE beacon (dog tag) using bluepy
-  - Calculates distance from RSSI
-  - When dog is within threshold, activates opening sequence:
-      1. DC motor (L298N) runs forward for MOTOR_TURN_S seconds to depress handle
-      2. RELAY_EXTEND energised  → +12 V to actuator pin A, GND to pin B
-         (actuator extends / door opens)
-      3. Pi sends HTTP POST to ESP32-CAM → starts recording
-      4. DOOR_OPEN_HOLD_S second hold timer
-      5. RELAY_EXTEND de-energised (brief dead-time to avoid shoot-through)
-      6. RELAY_RETRACT energised  → +12 V to actuator pin B, GND to pin A
-         (polarity reversed / actuator retracts / door closes)
-      7. RELAY_RETRACT de-energised
-      8. Pi sends HTTP POST to ESP32-CAM → stops recording
-      9. DC motor runs backward for MOTOR_TURN_S seconds to return handle
-  - Sends push notification via ntfy.sh (free, no account required)
-  - Web dashboard served locally at http://<pi-ip>:5000
-
-ESP32-CAM Recording
----------------------------------------------------------------------
-The ESP32-CAM firmware (esp32_cam_petdoor.ino) exposes:
-  POST http://<ESP32_CAM_IP>/record  → start recording to SD card
-  POST http://<ESP32_CAM_IP>/stop    → stop recording, save session
-
-Set ESP32_CAM_IP in CONFIG to the ESP32's local IP address.
-Recording begins the moment the door opens (dog steps outside) and
-stops once the door has fully retracted (dog is back inside).
-Set ESP32_CAM_IP to "" to disable recording (e.g. during testing).
-
-Linear Actuator Dual-Relay Wiring (polarity-swap / H-bridge style)
----------------------------------------------------------------------
-Use two identical SPDT 12 V relays (e.g. SRD-12VDC-SL-C).
-
-  12 V supply (+) ──┬──────────────────────────────────────┐
-                    │                                      │
-               RELAY_EXTEND                          RELAY_RETRACT
-               COM = 12 V+                          COM = 12 V+
-               NO  → Actuator Wire A                NO  → Actuator Wire B
-               NC  → (leave open)                  NC  → (leave open)
-
-  12 V supply (–) ──┬──────────────────────────────────────┐
-                    │                                      │
-               (wire to Actuator Wire B               (wire to Actuator Wire A
-                via second terminal                    via second terminal
-                on RELAY_EXTEND board)                 on RELAY_RETRACT board)
-
-  Simplified truth table:
-    RELAY_EXTEND ON,  RELAY_RETRACT OFF  →  A=+12V, B=GND  →  EXTEND
-    RELAY_EXTEND OFF, RELAY_RETRACT ON   →  A=GND,  B=+12V →  RETRACT
-    Both OFF                             →  actuator unpowered (safe idle)
-    *** NEVER energise both relays simultaneously ***
-
-DC Motor (L298N) Wiring:
-  ENA  → MOTOR_ENA_PIN  (PWM-capable GPIO, e.g. GPIO 12)
-  IN1  → MOTOR_IN1_PIN  (e.g. GPIO 24)
-  IN2  → MOTOR_IN2_PIN  (e.g. GPIO 25)
-  Motor terminals → L298N OUT1 / OUT2
-  L298N 12V → 12V supply, GND shared with Pi
-
-GPIO Pin Assignments (BCM numbering):
-  GPIO 14  -> RELAY_EXTEND  IN  (active HIGH)
-  GPIO 15  -> RELAY_RETRACT IN  (active HIGH)
-  GPIO 12  -> L298N ENA     (PWM)
-  GPIO 24  -> L298N IN1
-  GPIO 25  -> L298N IN2
-  Pin 2    -> 5V power (relay board VCC for both relays)
-  Pin 6    -> Ground   (relay board GND for both relays)
-  Pin 4    -> 5V power (UBEC output / L298N logic)
-  Pin 9    -> Ground   (UBEC output / L298N logic)
-"""
-
 import time
 import threading
 import logging
@@ -84,74 +9,43 @@ from bluepy.btle import Scanner, DefaultDelegate
 from flask import Flask, jsonify
 import requests
 
-# ---------------------------------------------------------------------------
-# Configuration  (edit these values to match your setup)
-# ---------------------------------------------------------------------------
 CONFIG = {
-    # BLE beacon MAC address printed on the DFRobot TEL0168 beacon
     "BEACON_MAC": "06:05:04:03:02:01",
 
-    # RSSI calibration (run calibrate_rssi.py first)
-    # A  = RSSI at 1 meter (negative integer, e.g. -65)
-    # N  = path-loss exponent (typically 2.0 indoors)
     "RSSI_A": -55,
     "RSSI_N": 2.8,
 
-    # Distance in meters that triggers the opening sequence
     "TRIGGER_DISTANCE_M": 1.8,
 
-    # How long (seconds) to keep the door open before closing
     "DOOR_OPEN_HOLD_S": 5,
 
-    # How long (seconds) to power the actuator in each direction.
-    # Slightly longer than the actuator's full-stroke travel time.
     "ACTUATOR_TRAVEL_S": 21.0,
 
-    # How long (seconds) to run the DC motor to fully depress the door handle.
-    # Run calibrate_dc.py to find the correct value for your setup.
     "MOTOR_TURN_S": 5,
 
-    # DC motor PWM duty cycle (0–100). Increase if the motor stalls.
     "MOTOR_SPEED": 50,
 
-    # Minimum seconds between opening events (prevents rapid re-triggers)
     "COOLDOWN_S": 15,
 
-    # ntfy.sh topic for push notifications (set to "" to disable)
     "NTFY_TOPIC": "my-pet-door-12345",
 
-    # ESP32-CAM local IP address (check Arduino Serial Monitor after boot).
-    # The Pi will POST to /record when the door opens and /stop when it closes,
-    # so footage is captured only while the dog is outside.
-    # Set to "" to disable ESP32 recording (e.g. during testing without camera).
     "ESP32_CAM_IP": "192.168.1.100",
 
-    # Seconds to wait for the ESP32 HTTP response before giving up.
     "ESP32_TIMEOUT_S": 3,
 
-    # Logging level: DEBUG, INFO, WARNING, ERROR
     "LOG_LEVEL": "INFO",
 }
 
-# ---------------------------------------------------------------------------
-# GPIO pin constants
-# ---------------------------------------------------------------------------
-RELAY_EXTEND_PIN  = 14   # HIGH → actuator extends  (door opens)
-RELAY_RETRACT_PIN = 15   # HIGH → actuator retracts (door closes)
-
-MOTOR_ENA_PIN = 12   # PWM-capable pin
+RELAY_EXTEND_PIN  = 14
+RELAY_RETRACT_PIN = 15
+MOTOR_ENA_PIN = 12
 MOTOR_IN1_PIN = 5
 MOTOR_IN2_PIN = 6
 
-# Dead-time between relay switching to prevent simultaneous closure
 RELAY_DEAD_TIME_S = 0.1
 
-# PWM carrier frequency for the motor enable pin
 _PWM_FREQ = 1000  # Hz
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=getattr(logging, CONFIG["LOG_LEVEL"]),
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -162,9 +56,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("petdoor")
 
-# ---------------------------------------------------------------------------
-# Shared state
-# ---------------------------------------------------------------------------
 state = {
     "door_open":       False,
     "last_open":       None,
@@ -175,21 +66,15 @@ state = {
 }
 state_lock = threading.Lock()
 
-# lgpio chip handle — set in gpio_setup()
 _chip = None
 
-# ---------------------------------------------------------------------------
-# GPIO initialisation
-# ---------------------------------------------------------------------------
 def gpio_setup():
     global _chip
     _chip = lgpio.gpiochip_open(0)
 
-    # Relay pins — both start LOW (actuator unpowered)
     lgpio.gpio_claim_output(_chip, RELAY_EXTEND_PIN,  0)
     lgpio.gpio_claim_output(_chip, RELAY_RETRACT_PIN, 0)
 
-    # L298N motor driver pins
     lgpio.gpio_claim_output(_chip, MOTOR_IN1_PIN, 0)
     lgpio.gpio_claim_output(_chip, MOTOR_IN2_PIN, 0)
     lgpio.gpio_claim_output(_chip, MOTOR_ENA_PIN, 0)
@@ -204,9 +89,6 @@ def gpio_cleanup():
         lgpio.gpiochip_close(_chip)
     log.info("GPIO cleaned up.")
 
-# ---------------------------------------------------------------------------
-# DC motor helpers
-# ---------------------------------------------------------------------------
 def _motor_forward(speed: int = None):
     if speed is None:
         speed = CONFIG["MOTOR_SPEED"]
@@ -254,9 +136,6 @@ def motor_reset_handle():
     _motor_stop()
     log.info("DC motor: handle returned to neutral.")
 
-# ---------------------------------------------------------------------------
-# Linear actuator relay helpers (polarity-swap, two-relay H-bridge)
-# ---------------------------------------------------------------------------
 def _relays_off():
     """De-energise both relays. Safe idle state — actuator unpowered."""
     lgpio.gpio_write(_chip, RELAY_EXTEND_PIN,  0)
@@ -284,9 +163,6 @@ def actuator_stop():
     _relays_off()
     log.debug("Both relays OFF — actuator stopped.")
 
-# ---------------------------------------------------------------------------
-# ESP32-CAM recording control
-# ---------------------------------------------------------------------------
 def esp32_record_start():
     """
     Tell the ESP32-CAM to start recording to its SD card.
@@ -329,9 +205,6 @@ def esp32_record_stop():
     except Exception as e:
         log.warning(f"ESP32 record stop failed: {e}")
 
-# ---------------------------------------------------------------------------
-# Push notification
-# ---------------------------------------------------------------------------
 def send_notification(message: str):
     topic = CONFIG.get("NTFY_TOPIC", "")
     if not topic:
@@ -347,9 +220,6 @@ def send_notification(message: str):
     except Exception as e:
         log.warning(f"Notification failed: {e}")
 
-# ---------------------------------------------------------------------------
-# Door open/close sequence
-# ---------------------------------------------------------------------------
 def open_door_sequence():
     """Full open-then-close sequence. Runs in its own thread."""
     now = datetime.now()
@@ -365,39 +235,32 @@ def open_door_sequence():
 
     log.info("--- Opening sequence START ---")
 
-    # Step 1: Depress door handle via DC motor (timed)
     log.info("DC motor: rotating to open latch...")
     motor_turn_handle()
-    time.sleep(0.3)   # brief pause for latch to fully disengage
+    time.sleep(0.3)
 
-    # Step 2: Extend linear actuator — door opens, dog can go outside
     log.info("Actuator EXTENDING — door opening...")
     actuator_extend()
     time.sleep(CONFIG["ACTUATOR_TRAVEL_S"])
     actuator_stop()
 
-    # Step 3: ESP32-CAM starts recording — dog is now outside
     log.info("ESP32-CAM: starting outdoor recording...")
     esp32_record_start()
 
     send_notification("🐾 Your pet is at the door — door is opening!")
 
-    # Step 4: Hold door open
     log.info(f"Holding door open for {CONFIG['DOOR_OPEN_HOLD_S']}s...")
     time.sleep(CONFIG["DOOR_OPEN_HOLD_S"])
 
-    # Step 5: Return DC motor to neutral (timed)
     log.info("DC motor: returning handle to neutral...")
     motor_reset_handle()
 
-    # Step 6: Retract linear actuator — door closes
     log.info("Actuator RETRACTING — door closing...")
     actuator_retract()
     time.sleep(CONFIG["ACTUATOR_TRAVEL_S"]+1.275)
     actuator_stop()
     time.sleep(0.2)
 
-    # Step 7: ESP32-CAM stops recording — dog is back inside
     log.info("ESP32-CAM: stopping recording...")
     esp32_record_stop()
 
@@ -410,9 +273,6 @@ def open_door_sequence():
 
     log.info("--- Opening sequence END ---")
 
-# ---------------------------------------------------------------------------
-# BLE distance calculation
-# ---------------------------------------------------------------------------
 class BLEDelegate(DefaultDelegate):
     def __init__(self):
         super().__init__()
@@ -430,9 +290,6 @@ def rssi_to_distance(rssi: int) -> float:
     N = CONFIG["RSSI_N"]
     return 10 ** ((A - rssi) / (10 * N))
 
-# ---------------------------------------------------------------------------
-# BLE scan loop  (runs in its own daemon thread)
-# ---------------------------------------------------------------------------
 def ble_scan_loop():
     scanner = Scanner().withDelegate(BLEDelegate())
     target_mac   = CONFIG["BEACON_MAC"].lower()
@@ -492,9 +349,6 @@ def ble_scan_loop():
             log.error(f"BLE scan error: {e}")
             time.sleep(2)
 
-# ---------------------------------------------------------------------------
-# Flask web dashboard
-# ---------------------------------------------------------------------------
 app = Flask(__name__)
 
 DASHBOARD_HTML = """
@@ -566,9 +420,6 @@ def api_state():
     with state_lock:
         return jsonify(dict(state))
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 def main():
     gpio_setup()
 
