@@ -357,15 +357,16 @@ def open_door_sequence():
     time.sleep(CONFIG["DOOR_OPEN_HOLD_S"])
 
     # Step 4: Retract linear actuator
+    log.info("DC motor: returning handle to neutral...")
+    motor_reset_handle()
+   
+
+    # Step 5: Return DC motor to neutral (timed)
     log.info("Actuator RETRACTING — door closing...")
     actuator_retract()
     time.sleep(CONFIG["ACTUATOR_TRAVEL_S"]+.75)
     actuator_stop()
     time.sleep(0.2)
-
-    # Step 5: Return DC motor to neutral (timed)
-    log.info("DC motor: returning handle to neutral...")
-    motor_reset_handle()
 
     with state_lock:
         state["door_open"] = False
