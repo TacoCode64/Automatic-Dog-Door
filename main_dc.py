@@ -9,15 +9,27 @@ System overview:
       1. DC motor (L298N) runs forward for MOTOR_TURN_S seconds to depress handle
       2. RELAY_EXTEND energised  → +12 V to actuator pin A, GND to pin B
          (actuator extends / door opens)
-      3. DOOR_OPEN_HOLD_S second hold timer
-      4. RELAY_EXTEND de-energised (brief dead-time to avoid shoot-through)
-      5. RELAY_RETRACT energised  → +12 V to actuator pin B, GND to pin A
+      3. Pi sends HTTP POST to ESP32-CAM → starts recording
+      4. DOOR_OPEN_HOLD_S second hold timer
+      5. RELAY_EXTEND de-energised (brief dead-time to avoid shoot-through)
+      6. RELAY_RETRACT energised  → +12 V to actuator pin B, GND to pin A
          (polarity reversed / actuator retracts / door closes)
-      6. RELAY_RETRACT de-energised
-      7. DC motor runs backward for MOTOR_TURN_S seconds to return handle
-  - Pi camera records video clips on each opening event
+      7. RELAY_RETRACT de-energised
+      8. Pi sends HTTP POST to ESP32-CAM → stops recording
+      9. DC motor runs backward for MOTOR_TURN_S seconds to return handle
   - Sends push notification via ntfy.sh (free, no account required)
   - Web dashboard served locally at http://<pi-ip>:5000
+
+ESP32-CAM Recording
+---------------------------------------------------------------------
+The ESP32-CAM firmware (esp32_cam_petdoor.ino) exposes:
+  POST http://<ESP32_CAM_IP>/record  → start recording to SD card
+  POST http://<ESP32_CAM_IP>/stop    → stop recording, save session
+
+Set ESP32_CAM_IP in CONFIG to the ESP32's local IP address.
+Recording begins the moment the door opens (dog steps outside) and
+stops once the door has fully retracted (dog is back inside).
+Set ESP32_CAM_IP to "" to disable recording (e.g. during testing).
 
 Linear Actuator Dual-Relay Wiring (polarity-swap / H-bridge style)
 ---------------------------------------------------------------------
@@ -59,21 +71,17 @@ GPIO Pin Assignments (BCM numbering):
   Pin 6    -> Ground   (relay board GND for both relays)
   Pin 4    -> 5V power (UBEC output / L298N logic)
   Pin 9    -> Ground   (UBEC output / L298N logic)
-  CSI port -> Pi Camera ribbon cable
 """
 
 import time
 import threading
 import logging
-import json
-import os
-import subprocess
 from collections import deque
 from datetime import datetime
 
 import lgpio
 from bluepy.btle import Scanner, DefaultDelegate
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify
 import requests
 
 # ---------------------------------------------------------------------------
@@ -112,11 +120,14 @@ CONFIG = {
     # ntfy.sh topic for push notifications (set to "" to disable)
     "NTFY_TOPIC": "my-pet-door-12345",
 
-    # Where to save video clips
-    "VIDEO_DIR": "/home/pi/petdoor_videos",
+    # ESP32-CAM local IP address (check Arduino Serial Monitor after boot).
+    # The Pi will POST to /record when the door opens and /stop when it closes,
+    # so footage is captured only while the dog is outside.
+    # Set to "" to disable ESP32 recording (e.g. during testing without camera).
+    "ESP32_CAM_IP": "192.168.1.100",
 
-    # Length of each video clip in seconds
-    "VIDEO_CLIP_S": 15,
+    # Seconds to wait for the ESP32 HTTP response before giving up.
+    "ESP32_TIMEOUT_S": 3,
 
     # Logging level: DEBUG, INFO, WARNING, ERROR
     "LOG_LEVEL": "INFO",
@@ -155,16 +166,14 @@ log = logging.getLogger("petdoor")
 # Shared state
 # ---------------------------------------------------------------------------
 state = {
-    "door_open": False,
-    "last_open": None,
-    "dog_detected": False,
-    "dog_distance_m": None,
-    "events": [],
-    "video_clips": [],
+    "door_open":       False,
+    "last_open":       None,
+    "dog_detected":    False,
+    "dog_distance_m":  None,
+    "esp32_recording": False,
+    "events":          [],
 }
 state_lock = threading.Lock()
-
-os.makedirs(CONFIG["VIDEO_DIR"], exist_ok=True)
 
 # lgpio chip handle — set in gpio_setup()
 _chip = None
@@ -276,29 +285,49 @@ def actuator_stop():
     log.debug("Both relays OFF — actuator stopped.")
 
 # ---------------------------------------------------------------------------
-# Camera helpers
+# ESP32-CAM recording control
 # ---------------------------------------------------------------------------
-def record_clip(filename: str, duration_s: int = CONFIG["VIDEO_CLIP_S"]):
-    """Record a video clip using libcamera-vid (Raspberry Pi camera)."""
-    path = os.path.join(CONFIG["VIDEO_DIR"], filename)
-    cmd = [
-        "libcamera-vid",
-        "-t", str(duration_s * 1000),
-        "-o", path,
-        "--width", "1280",
-        "--height", "720",
-        "--framerate", "15",
-        "--nopreview",
-    ]
+def esp32_record_start():
+    """
+    Tell the ESP32-CAM to start recording to its SD card.
+    Called the moment the door opens (dog is now outside).
+    Failure is logged but does NOT abort the door sequence.
+    """
+    ip = CONFIG.get("ESP32_CAM_IP", "")
+    if not ip:
+        log.debug("ESP32_CAM_IP not set — skipping record start.")
+        return
     try:
-        subprocess.Popen(cmd)
-        log.info(f"Recording clip: {path}")
+        resp = requests.post(
+            f"http://{ip}/record",
+            timeout=CONFIG["ESP32_TIMEOUT_S"],
+        )
+        log.info(f"ESP32 record start → {resp.status_code}: {resp.text.strip()}")
         with state_lock:
-            state["video_clips"].append(filename)
-            if len(state["video_clips"]) > 50:
-                state["video_clips"].pop(0)
+            state["esp32_recording"] = True
     except Exception as e:
-        log.error(f"Camera error: {e}")
+        log.warning(f"ESP32 record start failed: {e}")
+
+
+def esp32_record_stop():
+    """
+    Tell the ESP32-CAM to stop recording and finalise the session on SD.
+    Called after the door has fully retracted (dog is back inside).
+    """
+    ip = CONFIG.get("ESP32_CAM_IP", "")
+    if not ip:
+        log.debug("ESP32_CAM_IP not set — skipping record stop.")
+        return
+    try:
+        resp = requests.post(
+            f"http://{ip}/stop",
+            timeout=CONFIG["ESP32_TIMEOUT_S"],
+        )
+        log.info(f"ESP32 record stop  → {resp.status_code}: {resp.text.strip()}")
+        with state_lock:
+            state["esp32_recording"] = False
+    except Exception as e:
+        log.warning(f"ESP32 record stop failed: {e}")
 
 # ---------------------------------------------------------------------------
 # Push notification
@@ -341,32 +370,36 @@ def open_door_sequence():
     motor_turn_handle()
     time.sleep(0.3)   # brief pause for latch to fully disengage
 
-    # Step 2: Extend linear actuator
+    # Step 2: Extend linear actuator — door opens, dog can go outside
     log.info("Actuator EXTENDING — door opening...")
     actuator_extend()
     time.sleep(CONFIG["ACTUATOR_TRAVEL_S"])
     actuator_stop()
 
-    # Record video and send notification
-    clip_name = now.strftime("clip_%Y%m%d_%H%M%S.h264")
-    record_clip(clip_name)
+    # Step 3: ESP32-CAM starts recording — dog is now outside
+    log.info("ESP32-CAM: starting outdoor recording...")
+    esp32_record_start()
+
     send_notification("🐾 Your pet is at the door — door is opening!")
 
-    # Step 3: Hold door open
+    # Step 4: Hold door open
     log.info(f"Holding door open for {CONFIG['DOOR_OPEN_HOLD_S']}s...")
     time.sleep(CONFIG["DOOR_OPEN_HOLD_S"])
 
-    # Step 4: Retract linear actuator
+    # Step 5: Return DC motor to neutral (timed)
     log.info("DC motor: returning handle to neutral...")
     motor_reset_handle()
-   
 
-    # Step 5: Return DC motor to neutral (timed)
+    # Step 6: Retract linear actuator — door closes
     log.info("Actuator RETRACTING — door closing...")
     actuator_retract()
     time.sleep(CONFIG["ACTUATOR_TRAVEL_S"]+1.275)
     actuator_stop()
     time.sleep(0.2)
+
+    # Step 7: ESP32-CAM stops recording — dog is back inside
+    log.info("ESP32-CAM: stopping recording...")
+    esp32_record_stop()
 
     with state_lock:
         state["door_open"] = False
@@ -478,6 +511,8 @@ DASHBOARD_HTML = """
           box-shadow:0 2px 4px rgba(0,0,0,.1); }
   .status-open   { color:#e74c3c; font-weight:bold; }
   .status-closed { color:#27ae60; font-weight:bold; }
+  .rec-yes       { color:#e67e22; font-weight:bold; }
+  .rec-no        { color:#95a5a6; }
   table { border-collapse:collapse; width:100%; }
   th,td { text-align:left; padding:8px; border-bottom:1px solid #ddd; }
   th    { background:#f0f0f0; }
@@ -491,6 +526,10 @@ DASHBOARD_HTML = """
         data.door_open ? 'status-open' : 'status-closed';
       document.getElementById('dog-dist').textContent =
         data.dog_distance_m !== null ? data.dog_distance_m + ' m' : 'Not detected';
+      document.getElementById('esp32-rec').textContent =
+        data.esp32_recording ? 'RECORDING' : 'Idle';
+      document.getElementById('esp32-rec').className =
+        data.esp32_recording ? 'rec-yes' : 'rec-no';
       let rows = data.events.slice(0,20).map(e=>
         `<tr><td>${e.time}</td><td>${e.event}</td></tr>`).join('');
       document.getElementById('events-body').innerHTML = rows;
@@ -505,6 +544,7 @@ DASHBOARD_HTML = """
 <div class="card">
   <h2>Door Status: <span id="door-status">—</span></h2>
   <p>Dog distance: <strong><span id="dog-dist">—</span></strong></p>
+  <p>ESP32-CAM: <strong><span id="esp32-rec">—</span></strong></p>
 </div>
 <div class="card">
   <h2>Recent Events</h2>
@@ -525,10 +565,6 @@ def dashboard():
 def api_state():
     with state_lock:
         return jsonify(dict(state))
-
-@app.route("/videos/<path:filename>")
-def serve_video(filename):
-    return send_from_directory(CONFIG["VIDEO_DIR"], filename)
 
 # ---------------------------------------------------------------------------
 # Entry point
