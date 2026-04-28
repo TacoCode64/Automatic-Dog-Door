@@ -1,14 +1,3 @@
-"""
-calibrate_rssi.py  —  Raspberry Pi
-===================================
-Run this script with the beacon held EXACTLY 1 metre from the Pi's antenna.
-It prints the average RSSI over 30 scans, which should be entered as
-RSSI_A in main.py CONFIG.
-
-Usage:
-    python3 calibrate_rssi.py AA:BB:CC:DD:EE:FF
-"""
-
 import sys
 import time
 from bluepy.btle import Scanner, DefaultDelegate
