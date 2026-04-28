@@ -359,7 +359,7 @@ def open_door_sequence():
     # Step 4: Retract linear actuator
     log.info("Actuator RETRACTING — door closing...")
     actuator_retract()
-    time.sleep(CONFIG["ACTUATOR_TRAVEL_S"]+1.5)
+    time.sleep(CONFIG["ACTUATOR_TRAVEL_S"]+1)
     actuator_stop()
     time.sleep(0.2)
 
