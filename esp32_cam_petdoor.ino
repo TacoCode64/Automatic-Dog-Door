@@ -1,34 +1,3 @@
-/*
- * ESP32-CAM Outdoor Camera Firmware
- * ===================================
- * Board  : AI-Thinker ESP32-CAM (OV2640 sensor)
- * IDE    : Arduino IDE 2.x  with  esp32 board package v2.0+
- *
- * Function:
- *   - Connects to your home WiFi
- *   - Streams MJPEG video accessible at  http://<esp32-ip>/stream
- *   - Serves snapshots at               http://<esp32-ip>/snapshot
- *   - Saves timestamped JPEGs to SD card when /record endpoint is called
- *   - The Raspberry Pi calls /record when it opens the door and /stop
- *     when the door closes, so only door-event footage is saved
- *
- * Board Library:
- *   Tools → Board → esp32 → "AI Thinker ESP32-CAM"
- *   (Install "esp32" package by Espressif from Boards Manager)
- *
- * Arduino Libraries required  (Sketch → Include Library → Manage Libraries):
- *   - "ESP32" board support (Espressif Systems) — includes WebServer,
- *     WiFi, SD_MMC, camera drivers  — NO separate install needed once
- *     the board package is installed.
- *
- * Wiring notes:
- *   - Power the ESP32-CAM from the MiniBooster (5V output → 5V pin)
- *   - GND → GND
- *   - The OV2640 ribbon cable plugs directly into the camera connector
- *   - Flash the board with the FTDI programmer (GPIO0 → GND during upload)
- *   - Remove GPIO0 → GND jumper after flashing
- */
-
 #include "esp_camera.h"
 #include <WiFi.h>
 #include <WebServer.h>
@@ -36,20 +5,13 @@
 #include "FS.h"
 #include <time.h>
 
-// ---------------------------------------------------------------------------
-// Configuration  ← EDIT THESE
-// ---------------------------------------------------------------------------
 const char* WIFI_SSID     = "Dollywood";
 const char* WIFI_PASSWORD = "Dolly7338";
 
-// NTP time server for timestamping SD card files
 const char* NTP_SERVER    = "pool.ntp.org";
-const long  GMT_OFFSET_S  = -21600;  // CST = UTC-6 (adjust for your timezone)
-const int   DST_OFFSET_S  = 3600;   // 1 hour DST
+const long  GMT_OFFSET_S  = -21600;
+const int   DST_OFFSET_S  = 3600;
 
-// ---------------------------------------------------------------------------
-// AI-Thinker ESP32-CAM pin map (do not change)
-// ---------------------------------------------------------------------------
 #define PWDN_GPIO_NUM   32
 #define RESET_GPIO_NUM  -1
 #define XCLK_GPIO_NUM    0
@@ -73,9 +35,6 @@ bool    recording    = false;
 uint32_t frameNumber = 0;
 String  sessionDir   = "";
 
-// ---------------------------------------------------------------------------
-// Camera init
-// ---------------------------------------------------------------------------
 bool initCamera() {
   camera_config_t config;
   config.ledc_channel  = LEDC_CHANNEL_0;
@@ -100,11 +59,11 @@ bool initCamera() {
   config.pixel_format  = PIXFORMAT_JPEG;
 
   if (psramFound()) {
-    config.frame_size   = FRAMESIZE_VGA;   // 640×480
+    config.frame_size   = FRAMESIZE_VGA;
     config.jpeg_quality = 12;
     config.fb_count     = 2;
   } else {
-    config.frame_size   = FRAMESIZE_CIF;   // 352×288
+    config.frame_size   = FRAMESIZE_CIF;
     config.jpeg_quality = 15;
     config.fb_count     = 1;
   }
@@ -115,7 +74,6 @@ bool initCamera() {
     return false;
   }
 
-  // Flip image if camera is mounted upside-down
   sensor_t* s = esp_camera_sensor_get();
   s->set_vflip(s, 1);
   s->set_hmirror(s, 1);
@@ -123,9 +81,6 @@ bool initCamera() {
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// SD card init
-// ---------------------------------------------------------------------------
 bool initSD() {
   if (!SD_MMC.begin()) {
     Serial.println("SD card mount failed — recording disabled.");
@@ -135,11 +90,7 @@ bool initSD() {
   return true;
 }
 
-// ---------------------------------------------------------------------------
-// HTTP handlers
-// ---------------------------------------------------------------------------
 
-// GET /snapshot  — returns a single JPEG frame
 void handleSnapshot() {
   camera_fb_t* fb = esp_camera_fb_get();
   if (!fb) {
@@ -151,7 +102,6 @@ void handleSnapshot() {
   esp_camera_fb_return(fb);
 }
 
-// GET /stream  — MJPEG stream
 void handleStream() {
   WiFiClient client = server.client();
   client.println("HTTP/1.1 200 OK");
@@ -169,15 +119,13 @@ void handleStream() {
     client.write(fb->buf, fb->len);
     client.println();
     esp_camera_fb_return(fb);
-    delay(100);  // ~10 fps
+    delay(100);
   }
 }
 
-// POST /record  — start saving frames to SD
 void handleRecordStart() {
   if (recording) { server.send(200, "text/plain", "Already recording"); return; }
 
-  // Create a session directory named by current timestamp
   struct tm ti;
   if (getLocalTime(&ti)) {
     char buf[32];
@@ -194,7 +142,6 @@ void handleRecordStart() {
   server.send(200, "text/plain", "Recording started: " + sessionDir);
 }
 
-// POST /stop  — stop recording
 void handleRecordStop() {
   recording = false;
   Serial.printf("Recording stopped. %u frames saved to %s\n",
@@ -203,7 +150,6 @@ void handleRecordStop() {
     "Stopped. Frames: " + String(frameNumber) + " Dir: " + sessionDir);
 }
 
-// GET /  — status page
 void handleRoot() {
   String ip   = WiFi.localIP().toString();
   String html = "<h2>ESP32-CAM Pet Door</h2>"
@@ -214,9 +160,6 @@ void handleRoot() {
   server.send(200, "text/html", html);
 }
 
-// ---------------------------------------------------------------------------
-// Recording task (runs on core 0)
-// ---------------------------------------------------------------------------
 void recordingTask(void* param) {
   for (;;) {
     if (recording) {
@@ -231,13 +174,10 @@ void recordingTask(void* param) {
         esp_camera_fb_return(fb);
       }
     }
-    vTaskDelay(200 / portTICK_PERIOD_MS);  // ~5 fps to SD
+    vTaskDelay(200 / portTICK_PERIOD_MS);
   }
 }
 
-// ---------------------------------------------------------------------------
-// Setup & loop
-// ---------------------------------------------------------------------------
 void setup() {
   Serial.begin(115200);
   Serial.println("\nESP32-CAM Pet Door — booting ...");
@@ -250,10 +190,8 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
   Serial.printf("\nConnected. IP: %s\n", WiFi.localIP().toString().c_str());
 
-  // Sync time from NTP
   configTime(GMT_OFFSET_S, DST_OFFSET_S, NTP_SERVER);
 
-  // Register routes
   server.on("/",         HTTP_GET,  handleRoot);
   server.on("/snapshot", HTTP_GET,  handleSnapshot);
   server.on("/stream",   HTTP_GET,  handleStream);
@@ -262,7 +200,6 @@ void setup() {
   server.begin();
   Serial.println("HTTP server started.");
 
-  // Start background recording task on core 0
   xTaskCreatePinnedToCore(recordingTask, "recTask", 4096, NULL, 1, NULL, 0);
 }
 
