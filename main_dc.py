@@ -283,7 +283,7 @@ class BLEDelegate(DefaultDelegate):
 
 def rssi_to_distance(rssi: int) -> float:
     """
-    Convert RSSI (dBm) to distance (metres).
+    Convert RSSI (dBm) to distance (meters).
     Formula: d = 10 ^ ((A - RSSI) / (10 * N))
     """
     A = CONFIG["RSSI_A"]
