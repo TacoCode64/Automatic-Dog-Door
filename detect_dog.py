@@ -1,66 +1,3 @@
-"""
-detect_dog.py  —  Standalone Dog Image Recognition
-====================================================
-Runs a MobileNet-SSD object detector to identify whether a dog is visible.
-Operates completely independently of main.py — do NOT import this from
-main.py; run it as a separate process so it doesn't compete for CPU/RAM
-with the door controller.
-
-Supports two camera sources (choose one or both):
-  --source pi      → Pi camera (via picamera2)
-  --source esp32   → ESP32-CAM MJPEG stream (via HTTP)
-  --source both    → Pi camera + ESP32-CAM simultaneously (two windows)
-
-Detection model:
-  MobileNet-SSD trained on the Pascal VOC dataset (20 classes).
-  "dog" is class index 12. Runs on CPU — no GPU required.
-  Achieves ~3–6 FPS on a Raspberry Pi 4B at VGA resolution.
-
-──────────────────────────────────────────────────────────────────────
-Model download (run once):
-  mkdir -p models
-  wget -q -O models/MobileNetSSD_deploy.prototxt \\
-    https://raw.githubusercontent.com/chuanqi305/MobileNet-SSD/master/MobileNetSSD_deploy.prototxt
-  wget -q -O models/MobileNetSSD_deploy.caffemodel \\
-    https://drive.usercontent.google.com/download?id=0B3gersZ2cHIxRm5PMWRoTkdHdHc
-──────────────────────────────────────────────────────────────────────
-
-Installation:
-  pip3 install opencv-python-headless picamera2 requests \\
-               --break-system-packages
-
-Usage examples:
-  # Pi camera only
-  python3 detect_dog.py --source pi
-
-  # ESP32-CAM stream only
-  python3 detect_dog.py --source esp32 --esp32-ip 192.168.1.100
-
-  # Both cameras at once
-  python3 detect_dog.py --source both --esp32-ip 192.168.1.100
-
-  # Save frames that contain a dog to ./detections/
-  python3 detect_dog.py --source esp32 --esp32-ip 192.168.1.100 --save
-
-  # Send ntfy push notification when a dog is detected
-  python3 detect_dog.py --source pi --ntfy-topic my-pet-door-12345
-
-  # Adjust confidence threshold (default 0.5)
-  python3 detect_dog.py --source pi --confidence 0.6
-
-  # Run headlessly (no display window) — useful over SSH
-  python3 detect_dog.py --source esp32 --esp32-ip 192.168.1.100 --no-display
-
-Output:
-  - Terminal: timestamped lines whenever a dog enters/leaves the frame
-  - Optional on-screen window with bounding boxes (disable with --no-display)
-  - Optional saved JPEG frames in ./detections/
-  - Optional ntfy.sh push notifications
-  - Log file: detect_dog.log
-
-Ctrl+C to stop cleanly.
-"""
-
 import argparse
 import logging
 import os
@@ -72,38 +9,28 @@ import cv2
 import numpy as np
 import requests
 
-# ── Try importing picamera2 — only needed for --source pi / both ──────────────
 try:
     from picamera2 import Picamera2
     _PICAMERA2_AVAILABLE = True
 except ImportError:
     _PICAMERA2_AVAILABLE = False
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-# Pascal VOC class labels for MobileNet-SSD (index 0 = background)
 VOC_CLASSES = [
     "background", "aeroplane", "bicycle", "bird", "boat", "bottle",
     "bus", "car", "cat", "chair", "cow", "diningtable", "dog",
     "horse", "motorbike", "person", "pottedplant", "sheep", "sofa",
     "train", "tvmonitor",
 ]
-DOG_CLASS_IDX = VOC_CLASSES.index("dog")  # 12
+DOG_CLASS_IDX = VOC_CLASSES.index("dog")
 
-# Default model paths (relative to this script's directory)
 _SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_PROTO  = os.path.join(_SCRIPT_DIR, "models", "MobileNetSSD_deploy.prototxt")
 DEFAULT_MODEL  = os.path.join(_SCRIPT_DIR, "models", "MobileNetSSD_deploy.caffemodel")
 
-# MobileNet-SSD input normalisation
-_SCALE = 0.007843          # 1/127.5
+_SCALE = 0.007843
 _MEAN  = (127.5, 127.5, 127.5)
 _INPUT_SIZE = (300, 300)
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -114,9 +41,6 @@ logging.basicConfig(
 )
 log = logging.getLogger("detect_dog")
 
-# ---------------------------------------------------------------------------
-# Argument parsing
-# ---------------------------------------------------------------------------
 def parse_args():
     p = argparse.ArgumentParser(
         description="Standalone dog image-recognition for the pet door project."
@@ -163,9 +87,6 @@ def parse_args():
     )
     return p.parse_args()
 
-# ---------------------------------------------------------------------------
-# Model loader
-# ---------------------------------------------------------------------------
 def load_model(proto_path: str, model_path: str) -> cv2.dnn.Net:
     """Load and return the MobileNet-SSD Caffe model."""
     if not os.path.isfile(proto_path):
@@ -182,9 +103,6 @@ def load_model(proto_path: str, model_path: str) -> cv2.dnn.Net:
     log.info("MobileNet-SSD model loaded.")
     return net
 
-# ---------------------------------------------------------------------------
-# Inference
-# ---------------------------------------------------------------------------
 def detect_dogs(net: cv2.dnn.Net, frame: np.ndarray, conf_threshold: float):
     """
     Run MobileNet-SSD on a single BGR frame.
@@ -201,7 +119,7 @@ def detect_dogs(net: cv2.dnn.Net, frame: np.ndarray, conf_threshold: float):
         mean=_MEAN,
     )
     net.setInput(blob)
-    output = net.forward()  # shape: (1, 1, N, 7)
+    output = net.forward()
 
     annotated   = frame.copy()
     dog_detections = []
@@ -213,7 +131,6 @@ def detect_dogs(net: cv2.dnn.Net, frame: np.ndarray, conf_threshold: float):
         if class_id != DOG_CLASS_IDX or confidence < conf_threshold:
             continue
 
-        # Bounding box in pixel coordinates
         x1 = int(output[0, 0, i, 3] * w)
         y1 = int(output[0, 0, i, 4] * h)
         x2 = int(output[0, 0, i, 5] * w)
@@ -221,7 +138,6 @@ def detect_dogs(net: cv2.dnn.Net, frame: np.ndarray, conf_threshold: float):
 
         dog_detections.append((confidence, x1, y1, x2, y2))
 
-        # Draw bounding box and label
         cv2.rectangle(annotated, (x1, y1), (x2, y2), (0, 200, 0), 2)
         label = f"dog {confidence:.0%}"
         (lw, lh), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
@@ -233,9 +149,6 @@ def detect_dogs(net: cv2.dnn.Net, frame: np.ndarray, conf_threshold: float):
 
     return dog_detections, annotated
 
-# ---------------------------------------------------------------------------
-# Notification
-# ---------------------------------------------------------------------------
 def notify(topic: str, message: str):
     """Send a push notification via ntfy.sh (non-blocking, best-effort)."""
     if not topic:
@@ -250,9 +163,6 @@ def notify(topic: str, message: str):
     except Exception as e:
         log.warning(f"ntfy notification failed: {e}")
 
-# ---------------------------------------------------------------------------
-# Frame sources
-# ---------------------------------------------------------------------------
 def pi_camera_frames(width: int, height: int):
     """
     Generator that yields BGR frames from the Pi camera (picamera2).
@@ -301,11 +211,8 @@ def esp32_frames(ip: str):
                 yield frame
         finally:
             cap.release()
-        time.sleep(1)  # brief pause before reconnect attempt
+        time.sleep(1)
 
-# ---------------------------------------------------------------------------
-# Per-source detection loop
-# ---------------------------------------------------------------------------
 def run_detection_loop(
     source_name: str,
     frame_gen,
@@ -324,7 +231,7 @@ def run_detection_loop(
     """
     dog_present = False
     last_notify_time = 0.0
-    notify_cooldown  = 30.0  # seconds between repeated notifications
+    notify_cooldown  = 30.0
     window_name      = f"Dog Detector — {source_name}"
 
     log.info(f"[{source_name}] Detection loop started.")
@@ -333,13 +240,11 @@ def run_detection_loop(
         detections, annotated = detect_dogs(net, frame, conf_threshold)
         dog_now = len(detections) > 0
 
-        # ── State-change logging ───────────────────────────────────────────
         if dog_now and not dog_present:
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             best_conf = max(d[0] for d in detections)
             log.info(f"[{source_name}] DOG DETECTED  conf={best_conf:.0%}  @ {ts}")
 
-            # Notify (with cooldown to avoid spamming)
             now_t = time.time()
             if ntfy_topic and (now_t - last_notify_time) >= notify_cooldown:
                 threading.Thread(
@@ -354,7 +259,6 @@ def run_detection_loop(
 
         dog_present = dog_now
 
-        # ── Overlay source label and detection count ───────────────────────
         status_text = (
             f"{source_name} | {'DOG DETECTED' if dog_now else 'No dog'}"
         )
@@ -365,13 +269,11 @@ def run_detection_loop(
             2,
         )
 
-        # ── Save frame if dog detected ────────────────────────────────────
         if save_frames and dog_now:
             ts_file = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             fname = os.path.join(save_dir, f"{source_name}_{ts_file}.jpg")
             cv2.imwrite(fname, annotated)
 
-        # ── Display ───────────────────────────────────────────────────────
         if show_display:
             cv2.imshow(window_name, annotated)
             if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -382,16 +284,11 @@ def run_detection_loop(
         cv2.destroyWindow(window_name)
     log.info(f"[{source_name}] Detection loop ended.")
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
 def main():
     args = parse_args()
 
-    # ── Load model ────────────────────────────────────────────────────────
     net = load_model(args.proto, args.model)
 
-    # ── Create save directory ─────────────────────────────────────────────
     save_dir = os.path.join(_SCRIPT_DIR, "detections")
     if args.save:
         os.makedirs(save_dir, exist_ok=True)
@@ -399,8 +296,7 @@ def main():
 
     show_display = not args.no_display
 
-    # ── Build source list ─────────────────────────────────────────────────
-    sources = []  # list of (name, generator)
+    sources = []
 
     if args.source in ("pi", "both"):
         sources.append((
@@ -418,7 +314,6 @@ def main():
         log.error("No camera source selected. Use --source pi, esp32, or both.")
         return
 
-    # ── Single source: run in main thread ────────────────────────────────
     if len(sources) == 1:
         name, gen = sources[0]
         try:
@@ -435,10 +330,7 @@ def main():
         except KeyboardInterrupt:
             log.info("Stopped by user.")
 
-    # ── Two sources: each runs in its own thread ──────────────────────────
     else:
-        # Each thread gets its OWN net instance — cv2.dnn.Net is not
-        # thread-safe, so we reload the model for the second thread.
         net2 = load_model(args.proto, args.model)
         model_map = {sources[0][0]: net, sources[1][0]: net2}
 
