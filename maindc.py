@@ -90,14 +90,14 @@ CONFIG = {
     "RSSI_N": 2.8,
 
     # Distance in meters that triggers the opening sequence
-    "TRIGGER_DISTANCE_M": 2.0,
+    "TRIGGER_DISTANCE_M": 1.5,
 
     # How long (seconds) to keep the door open before closing
     "DOOR_OPEN_HOLD_S": 5,
 
     # How long (seconds) to power the actuator in each direction.
     # Slightly longer than the actuator's full-stroke travel time.
-    "ACTUATOR_TRAVEL_S": 17.0,
+    "ACTUATOR_TRAVEL_S": 22.0,
 
     # How long (seconds) to run the DC motor to fully depress the door handle.
     # Run calibrate_dc.py to find the correct value for your setup.
@@ -359,7 +359,7 @@ def open_door_sequence():
     # Step 4: Retract linear actuator
     log.info("Actuator RETRACTING — door closing...")
     actuator_retract()
-    time.sleep(CONFIG["ACTUATOR_TRAVEL_S"]+.75)
+    time.sleep(CONFIG["ACTUATOR_TRAVEL_S"]+1.5)
     actuator_stop()
     time.sleep(0.2)
 
