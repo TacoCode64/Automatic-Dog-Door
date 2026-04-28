@@ -97,7 +97,7 @@ CONFIG = {
 
     # How long (seconds) to power the actuator in each direction.
     # Slightly longer than the actuator's full-stroke travel time.
-    "ACTUATOR_TRAVEL_S": 11.0,
+    "ACTUATOR_TRAVEL_S": 17.0,
 
     # How long (seconds) to run the DC motor to fully depress the door handle.
     # Run calibrate_dc.py to find the correct value for your setup.
