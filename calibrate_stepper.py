@@ -1,21 +1,3 @@
-"""
-calibrate_stepper.py  —  Raspberry Pi
-======================================
-Use this script to find the correct number of half-steps needed to
-fully depress your specific door handle.
-
-Controls:
-  +   add 10 steps forward  (watch the handle rotate)
-  -   add 10 steps backward
-  r   reset (run backward the accumulated steps)
-  q   quit and print the final step count to enter in main.py CONFIG
-
-Wiring must match STEPPER_PINS in main.py.
-
-Usage:
-    python3 calibrate_stepper.py
-"""
-
 import sys
 import tty
 import termios
