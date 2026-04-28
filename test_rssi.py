@@ -1,33 +1,3 @@
-"""
-test_ble.py  —  Raspberry Pi
-==============================
-Scans for the BLE beacon, collects exactly 10 readings, then stops.
-Prints tab-separated rows that can be selected, copied, and pasted
-directly into Google Sheets or Excel. Each row is one reading.
-
-Terminal output format (tab-separated):
-    No    Timestamp    RSSI_dBm    Distance_m    Actual_m
-
-The header row is printed once at startup. All data rows use the same
-tab-separated format so a paste into Sheets auto-splits into columns.
-
-The CSV log (ble_log.csv) is also written as a backup.
-
-Usage:
-    sudo python3 test_ble.py <MAC> [RSSI_A] [N] [actual_distance_m]
-
-Arguments:
-    MAC               beacon MAC address  (required)
-    RSSI_A            RSSI at 1 m, negative int  (default: -60)
-    N                 path-loss exponent          (default: 3.4)
-    actual_distance_m known distance you are standing at (default: 0.0)
-                      set this so Distance_m vs Actual_m columns
-                      are ready to compare in Sheets
-
-Example — standing 2 m away, using calibrated values:
-    sudo python3 test_ble.py AA:BB:CC:DD:EE:FF -62 3.2 2.0
-"""
-
 import sys
 import csv
 from datetime import datetime
@@ -56,13 +26,11 @@ def main():
 
     scanner = Scanner().withDelegate(_D())
 
-    # ── Run info printed above the data block (# lines are ignored by Sheets) ──
     print(f"# BLE Distance Log — {COLLECTION_LIMIT} readings")
     print(f"# MAC: {mac}  |  RSSI_A: {A}  |  N: {N}  |  Actual_m: {actual_m}")
     print(f"# Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print()
 
-    # ── Header row — tab-separated ────────────────────────────────────────────
     print("No\tTimestamp\tRSSI_dBm\tDistance_m\tActual_m")
 
     count = 0
